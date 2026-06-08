@@ -27,8 +27,7 @@ def ensure_menubar_icon() -> Optional[str]:
     """Rendert (falls nötig) das Template-PNG und gibt den Pfad zurück, sonst ``None``."""
     dest = app_support_dir() / "menubar_template.png"
     try:
-        if not dest.exists():
-            _render(dest)
+        _render(dest)  # immer neu rendern -> kein veralteter Cache (Icon ist winzig/günstig)
         return str(dest)
     except Exception as exc:  # noqa: BLE001 - ohne Icon fällt die App auf Textglyph zurück
         LOGGER.warning("Menüleisten-Icon konnte nicht erzeugt werden: %s", exc)
@@ -67,22 +66,28 @@ def _sf_symbol_image(name: str):
 
 
 def _bitmap_from_image(img):
-    """Rendert ein NSImage in einen Bitmap-Rep (schwarz/alpha, retina) zum Speichern als PNG."""
+    """Rendert ein NSImage zentriert in einen **quadratischen** Bitmap-Rep (schwarz/alpha, retina).
+
+    Quadratisch ist wichtig: rumps zwingt das Menüleisten-Icon auf 20×20. Ein nicht-quadratisches
+    Bild (die Wolke ist ~32×22) würde dadurch gestaucht. Im Quadrat mit erhaltenem Seitenverhältnis
+    bleibt die Form korrekt (mit etwas vertikalem Rand).
+    """
     import AppKit
     from Foundation import NSMakeRect, NSSize
 
     size = img.size()
-    w, h = (size.width or _POINTS), (size.height or _POINTS)
+    sw, sh = (size.width or _POINTS), (size.height or _POINTS)
+    side = max(sw, sh)
+    px = int(round(side * _SCALE))
     rep = AppKit.NSBitmapImageRep.alloc().initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bitmapFormat_bytesPerRow_bitsPerPixel_(
-        None, int(round(w * _SCALE)), int(round(h * _SCALE)), 8, 4, True, False,
-        AppKit.NSCalibratedRGBColorSpace, 0, 0, 0
+        None, px, px, 8, 4, True, False, AppKit.NSCalibratedRGBColorSpace, 0, 0, 0
     )
-    rep.setSize_(NSSize(w, h))
+    rep.setSize_(NSSize(side, side))
     ctx = AppKit.NSGraphicsContext.graphicsContextWithBitmapImageRep_(rep)
     AppKit.NSGraphicsContext.saveGraphicsState()
     AppKit.NSGraphicsContext.setCurrentContext_(ctx)
     AppKit.NSColor.blackColor().set()
-    img.drawInRect_(NSMakeRect(0, 0, w, h))
+    img.drawInRect_(NSMakeRect((side - sw) / 2, (side - sh) / 2, sw, sh))  # zentriert
     AppKit.NSGraphicsContext.restoreGraphicsState()
     return rep
 
