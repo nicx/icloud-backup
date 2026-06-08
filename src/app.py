@@ -55,7 +55,9 @@ class BackupApp(rumps.App):
     """Menüleisten-Resident für das iCloud-Multi-User-Backup."""
 
     def __init__(self) -> None:
-        super().__init__("iCloud Backup", title=ICON_OK, quit_button="Beenden")
+        # quit_button=None: wir fügen "Beenden" selbst hinzu, da _rebuild_menu das Menü
+        # komplett neu aufbaut und rumps' Auto-Quit-Button dabei sonst verloren ginge.
+        super().__init__("iCloud Backup", title=ICON_OK, quit_button=None)
         self.settings: Settings = load_settings()
         self.store: UsersStore = UsersStore.loaded()
         self._sync_lock = threading.Lock()  # verhindert überlappende Sync-Läufe
@@ -92,7 +94,9 @@ class BackupApp(rumps.App):
         autostart_item = rumps.MenuItem("Beim Login starten", callback=self._toggle_autostart)
         autostart_item.state = 1 if autostart.is_enabled() else 0
         items.append(autostart_item)
-        self.menu = items  # Beenden wird von rumps automatisch ergänzt
+        items.append(rumps.separator)
+        items.append(rumps.MenuItem("Beenden", callback=self._quit))
+        self.menu = items
         self._update_icon()
 
     def _user_menu_item(self, user: User) -> rumps.MenuItem:
@@ -314,6 +318,9 @@ class BackupApp(rumps.App):
         self.settings.sync_interval_hours = hours
         save_settings(self.settings)
         notify.notify("iCloud Backup", f"Sync-Intervall: alle {hours} h.")
+
+    def _quit(self, _sender) -> None:
+        rumps.quit_application()
 
     # -- Autostart -----------------------------------------------------------
 
