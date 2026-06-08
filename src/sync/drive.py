@@ -45,15 +45,17 @@ class DriveStats:
                 f"{self.errors} Fehler ({self.folders} Ordner)")
 
 
-def sync_drive(api, dest_base_path: str, apple_id: str) -> DriveStats:
+def sync_drive(api, dest_base_path: str, apple_id: str, progress_cb=None) -> DriveStats:
     """Sichert iCloud Drive inkrementell nach ``dest_base_path/Drive``.
 
     :param api: authentifizierte ``PyiCloudService``-Instanz.
+    :param progress_cb: optionaler Callback ``cb(counts: dict)`` für Live-Fortschritt.
     :returns: :class:`DriveStats` mit Zählern für das Logging.
     """
     stats = DriveStats()
     root_dest = Path(dest_base_path) / "Drive"
     conn = state.connect(apple_id)
+    _emit(stats, progress_cb)
     try:
         try:
             children = util.with_retries(lambda: api.drive.get_children(), label="drive.root")
@@ -66,7 +68,7 @@ def sync_drive(api, dest_base_path: str, apple_id: str) -> DriveStats:
                 name = util.safe_component(child.name)
             except Exception:  # noqa: BLE001
                 name = "<unbenannt>"
-            _walk(child, [name], root_dest, conn, stats, depth=0)
+            _walk(child, [name], root_dest, conn, stats, 0, progress_cb)
         state.meta_set(conn, "drive_last_run", state._iso(_utcnow()))
         LOGGER.info("[%s] %s", apple_id, stats.summary())
         return stats
@@ -74,7 +76,14 @@ def sync_drive(api, dest_base_path: str, apple_id: str) -> DriveStats:
         conn.close()
 
 
-def _walk(node, rel_parts: list[str], root_dest: Path, conn, stats: DriveStats, depth: int) -> None:
+def _emit(stats: DriveStats, progress_cb) -> None:
+    if progress_cb is not None:
+        progress_cb({"downloaded": stats.downloaded, "skipped": stats.skipped,
+                     "errors": stats.errors})
+
+
+def _walk(node, rel_parts: list[str], root_dest: Path, conn, stats: DriveStats,
+          depth: int, progress_cb=None) -> None:
     """Verarbeitet einen Knoten rekursiv (Datei -> ggf. laden, Ordner -> absteigen)."""
     try:
         node_type = node.type
@@ -88,6 +97,7 @@ def _walk(node, rel_parts: list[str], root_dest: Path, conn, stats: DriveStats, 
 
     if node_type == "file":
         _sync_file(node, rel_parts, root_dest, conn, stats)
+        _emit(stats, progress_cb)
         return
 
     # Ordner (oder app_library etc.): absteigen.
@@ -107,7 +117,7 @@ def _walk(node, rel_parts: list[str], root_dest: Path, conn, stats: DriveStats, 
             child_name = util.safe_component(child.name)
         except Exception:  # noqa: BLE001
             child_name = "<unbenannt>"
-        _walk(child, rel_parts + [child_name], root_dest, conn, stats, depth + 1)
+        _walk(child, rel_parts + [child_name], root_dest, conn, stats, depth + 1, progress_cb)
 
 
 def _sync_file(node, rel_parts: list[str], root_dest: Path, conn, stats: DriveStats) -> None:

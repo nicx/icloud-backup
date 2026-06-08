@@ -80,6 +80,10 @@ OPTIONS = {
     "includes": ["sqlite3"],
 }
 
+_ICON = os.path.join(HERE, "icon.icns")
+if os.path.exists(_ICON):
+    OPTIONS["iconfile"] = _ICON
+
 if __name__ == "__main__":
     setup(
         app=APP,

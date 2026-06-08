@@ -46,12 +46,18 @@ def _check_free_space(dest_base_path: str) -> None:
         pass
 
 
-def run_user(user: User, store: Optional[UsersStore] = None) -> UserStatus:
+def run_user(user: User, store: Optional[UsersStore] = None, progress_cb=None) -> UserStatus:
     """Führt einen kompletten Sync-Lauf für *einen* User aus.
 
     Setzt Status auf ``RUNNING`` und am Ende ``OK``/``ERROR``/``NEEDS_REAUTH`` und
     aktualisiert ``last_run`` bei Erfolg.
+
+    :param progress_cb: optionaler Callback ``cb(apple_id, phase, counts)`` für Live-Fortschritt.
     """
+    def _phase_cb(phase: str):
+        if progress_cb is None:
+            return None
+        return lambda counts: progress_cb(user.apple_id, phase, counts)
     def _set(status: UserStatus, last_run: Optional[str] = None) -> UserStatus:
         if store is not None:
             store.set_status(user.apple_id, status, last_run=last_run)
@@ -86,10 +92,10 @@ def run_user(user: User, store: Optional[UsersStore] = None) -> UserStatus:
     had_error = False
     try:
         if user.sync_drive:
-            stats = drive.sync_drive(api, user.dest_base_path, user.apple_id)
+            stats = drive.sync_drive(api, user.dest_base_path, user.apple_id, _phase_cb("drive"))
             had_error = had_error or stats.errors > 0
         if user.sync_photos:
-            pstats = photos.sync_photos(api, user.dest_base_path, user.apple_id)
+            pstats = photos.sync_photos(api, user.dest_base_path, user.apple_id, _phase_cb("photos"))
             had_error = had_error or pstats.errors > 0
     except Exception:  # noqa: BLE001 - harter, unerwarteter Fehler
         LOGGER.exception("Sync für %s abgebrochen", user.apple_id)
@@ -100,11 +106,11 @@ def run_user(user: User, store: Optional[UsersStore] = None) -> UserStatus:
     return _set(status, last_run=_now_iso())
 
 
-def run_all(store: UsersStore) -> None:
+def run_all(store: UsersStore, progress_cb=None) -> None:
     """Sequenziell alle aktiven User durchlaufen. Ein Fehler stoppt die anderen nicht."""
     for user in store.list():
         try:
-            run_user(user, store)
+            run_user(user, store, progress_cb)
         except Exception:  # noqa: BLE001
             LOGGER.exception("Sync-Lauf für %s abgebrochen", user.apple_id)
             store.set_status(user.apple_id, UserStatus.ERROR)

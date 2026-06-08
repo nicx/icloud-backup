@@ -210,8 +210,13 @@ def test_engine(monkeypatch_pw="secret"):
     sess.login = lambda aid, pw: sess.LoginResult(api=api)
 
     user = User(apple_id="e@example.com", sync_drive=True, sync_photos=True, dest_base_path=dest)
-    status = engine.run_user(user)
+    progress_events = []
+    status = engine.run_user(user, progress_cb=lambda aid, phase, c: progress_events.append((aid, phase, c)))
     check(status == UserStatus.OK, f"engine: Status OK (war {status})")
+    phases = {p for _, p, _ in progress_events}
+    check(phases == {"drive", "photos"}, f"engine: Progress beider Phasen (war {phases})")
+    check(any(c.get("downloaded", 0) >= 1 for _, ph, c in progress_events if ph == "photos"),
+          "engine: Photos-Progress meldet Downloads")
     check(os.path.exists(os.path.join(dest, "Drive", "d.txt")), "engine: Drive-Datei da")
     check(len(os.listdir(os.path.join(dest, "Photos", "2023", "07"))) == 1, "engine: Photo da")
 

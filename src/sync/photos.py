@@ -50,15 +50,23 @@ class PhotoStats:
                 f"{self.skipped} unverändert, {self.errors} Fehler")
 
 
-def sync_photos(api, dest_base_path: str, apple_id: str) -> PhotoStats:
+def _emit(stats: PhotoStats, seen: int, progress_cb) -> None:
+    if progress_cb is not None:
+        progress_cb({"downloaded": stats.downloaded, "skipped": stats.skipped,
+                     "errors": stats.errors, "seen": seen})
+
+
+def sync_photos(api, dest_base_path: str, apple_id: str, progress_cb=None) -> PhotoStats:
     """Sichert iCloud Photos inkrementell/resumebar nach ``dest_base_path/Photos``.
 
     :param api: authentifizierte ``PyiCloudService``-Instanz.
+    :param progress_cb: optionaler Callback ``cb(counts: dict)`` für Live-Fortschritt.
     :returns: :class:`PhotoStats` mit Zählern für das Logging.
     """
     stats = PhotoStats()
     photos_dest = Path(dest_base_path) / "Photos"
     conn = state.connect(apple_id)
+    _emit(stats, 0, progress_cb)
     try:
         try:
             album = api.photos.all
@@ -84,6 +92,7 @@ def sync_photos(api, dest_base_path: str, apple_id: str) -> PhotoStats:
                 LOGGER.info("[%s] Photos-Fortschritt: %d gesichtet, %d geladen",
                             apple_id, seen, stats.downloaded)
             _sync_asset(api, asset, photos_dest, conn, stats)
+            _emit(stats, seen, progress_cb)
 
         state.meta_set(conn, "photos_last_run", _utcnow_iso())
         LOGGER.info("[%s] %s", apple_id, stats.summary())

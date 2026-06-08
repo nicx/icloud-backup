@@ -45,6 +45,11 @@ STATUS_SYMBOL = {
     UserStatus.ERROR: "⚠️",
 }
 
+# Spinner-Frames für die Menüleiste während eines Laufs.
+SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+# Refresh-Rate der Live-Fortschrittsanzeige (Sekunden).
+UI_TICK_SECONDS = 1.0
+
 
 class BackupApp(rumps.App):
     """Menüleisten-Resident für das iCloud-Multi-User-Backup."""
@@ -54,10 +59,17 @@ class BackupApp(rumps.App):
         self.settings: Settings = load_settings()
         self.store: UsersStore = UsersStore.loaded()
         self._sync_lock = threading.Lock()  # verhindert überlappende Sync-Läufe
+        self._progress: dict = {}           # apple_id -> {"drive": {...}, "photos": {...}}
+        self._user_items: dict = {}         # apple_id -> rumps.MenuItem (für Live-Updates)
+        self._spin = 0
+        self._was_running = False
         self._rebuild_menu()
 
         self.timer = rumps.Timer(self._tick, TICK_SECONDS)
         self.timer.start()
+        # Schneller Timer nur für die Live-Fortschrittsanzeige (Spinner + Counts).
+        self.ui_timer = rumps.Timer(self._ui_tick, UI_TICK_SECONDS)
+        self.ui_timer.start()
         # Beim Start einmal die Sessions prüfen (im Hintergrund), damit needs_reauth früh sichtbar ist.
         self._spawn(self._refresh_sessions)
 
@@ -66,6 +78,7 @@ class BackupApp(rumps.App):
     def _rebuild_menu(self) -> None:
         """Baut das gesamte Menü aus dem aktuellen Store-Zustand neu auf."""
         self.menu.clear()
+        self._user_items = {}
         items: list = []
         for user in self.store.list():
             items.append(self._user_menu_item(user))
@@ -88,6 +101,7 @@ class BackupApp(rumps.App):
         parent.add(rumps.MenuItem("Re-Auth…", callback=partial(self._reauth, user.apple_id)))
         parent.add(rumps.separator)
         parent.add(rumps.MenuItem("Entfernen…", callback=partial(self._remove_user, user.apple_id)))
+        self._user_items[user.apple_id] = parent
         return parent
 
     def _update_icon(self) -> None:
@@ -272,11 +286,46 @@ class BackupApp(rumps.App):
 
     def _run_sync_all(self) -> None:
         with self._sync_lock:
-            engine.run_all(self.store)
+            engine.run_all(self.store, self._on_progress)
 
     def _run_sync_user(self, user: User) -> None:
         with self._sync_lock:
-            engine.run_user(user, self.store)
+            engine.run_user(user, self.store, self._on_progress)
+
+    # -- Live-Fortschritt ----------------------------------------------------
+
+    def _on_progress(self, apple_id: str, phase: str, counts: dict) -> None:
+        """Callback aus dem Sync-Thread: aktuelle Zähler je User/Phase ablegen (nur Daten)."""
+        self._progress.setdefault(apple_id, {})[phase] = counts
+
+    def _ui_tick(self, _timer) -> None:
+        """Schneller UI-Refresh: Spinner + Live-Counts, solange ein User läuft."""
+        running = [u for u in self.store.list() if u.status == UserStatus.RUNNING]
+        if running:
+            self._spin = (self._spin + 1) % len(SPINNER)
+            self.title = f"{ICON_OK} {SPINNER[self._spin]}"
+            for u in running:
+                item = self._user_items.get(u.apple_id)
+                if item is not None:
+                    item.title = self._running_label(u.apple_id)
+            self._was_running = True
+        elif self._was_running:
+            # Lauf gerade beendet -> Endzustand sauber rendern.
+            self._was_running = False
+            self._progress.clear()
+            self._rebuild_menu()
+
+    def _running_label(self, apple_id: str) -> str:
+        p = self._progress.get(apple_id, {})
+        parts = []
+        d = p.get("drive")
+        if d:
+            parts.append(f"Drive {d.get('downloaded', 0)}↓")
+        ph = p.get("photos")
+        if ph:
+            parts.append(f"Photos {ph.get('downloaded', 0)}↓ / {ph.get('seen', 0)} gepr.")
+        detail = "  ".join(parts) if parts else "startet…"
+        return f"⟳ {apple_id} – {detail}"
 
     # -- Scheduler-Tick ------------------------------------------------------
 
@@ -290,7 +339,7 @@ class BackupApp(rumps.App):
     def _run_due(self, users: list[User]) -> None:
         with self._sync_lock:
             for user in users:
-                engine.run_user(user, self.store)
+                engine.run_user(user, self.store, self._on_progress)
 
     def _is_due(self, user: User) -> bool:
         """True, wenn der letzte Lauf länger als das Intervall zurückliegt (oder nie war).
