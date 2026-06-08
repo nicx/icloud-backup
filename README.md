@@ -73,10 +73,55 @@ gesichert. Bei Throttling greift exponentielles Backoff.
 .venv/bin/python tests/test_sync.py    # Mock-basiert, kein Netzwerk/Account nötig
 ```
 
-## Noch offen (spätere Durchgänge)
+## Build zum `.app`-Bundle (py2app)
 
-- py2app-Build zum `.app`-Bundle (`LSUIElement`, Ad-hoc-Signing, Gatekeeper-/Mount-Hinweise).
-- Autostart beim Login (SMAppService).
+Ein Schritt (Build + Ad-hoc-Signierung):
+
+```bash
+bash build/build.sh
+# Ergebnis: dist/iCloud Backup.app
+```
+
+Oder manuell:
+
+```bash
+.venv/bin/pip install -r requirements-build.txt
+.venv/bin/python build/setup.py py2app --dist-dir dist --bdist-base build/_py2app
+codesign --force --deep --sign - "dist/iCloud Backup.app"
+```
+
+Das Bundle ist eine reine **Menüleisten-App** (`LSUIElement` → kein Dock-Icon), Bundle-ID
+`de.nicx.icloud-backup`. Es ist **ad-hoc signiert** (kein Apple-Developer-Zertifikat).
+
+### Gatekeeper / Quarantäne
+
+Ein ad-hoc/unsigniertes Bundle wird beim ersten Start von Gatekeeper blockiert. Für den
+Eigengebrauch:
+
+- **Erststart:** Rechtsklick auf die App → **Öffnen** → im Dialog erneut **Öffnen**. Danach
+  startet sie künftig normal per Doppelklick.
+- Falls die App aus dem Internet/von einem anderen Mac kam und das Quarantäne-Flag trägt:
+  ```bash
+  xattr -dr com.apple.quarantine "dist/iCloud Backup.app"
+  ```
+
+> Die Ad-hoc-Signierung mit stabiler Bundle-ID mildert auch wiederholte Keychain-Freigabe-Prompts.
+
+### Autostart beim Login
+
+Im Menü **„Beim Login starten"** umschaltbar. Der Toggle legt einen LaunchAgent unter
+`~/Library/LaunchAgents/de.nicx.icloud-backup.plist` an bzw. entfernt ihn. Er funktioniert nur
+für das gebaute `.app`-Bundle (nicht im `python -m src.app`-Entwicklungsmodus).
+
+### Voraussetzung Ziel-Volume
+
+Vor jedem Lauf prüft die App, ob `dest_base_path` erreichbar ist. Ist das UNAS-Volume **nicht
+gemountet**, bricht der Lauf für den betroffenen User sauber ab (Status `error` + Notification) –
+ohne Crash, andere User laufen weiter.
+
+## Noch offen (optional)
+
+- Vollständige Notarisierung/Developer-ID-Signierung (für Verteilung über das eigene Gerät hinaus).
 
 ## Lizenz / Maintainer
 

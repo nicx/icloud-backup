@@ -11,6 +11,7 @@ Start (Entwicklung, ohne .app-Bundle)::
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 from datetime import datetime, timedelta, timezone
 from functools import partial
@@ -18,7 +19,7 @@ from typing import Optional
 
 import rumps
 
-from . import notify
+from . import autostart, notify
 from .auth import keychain, session
 from .config.settings import Settings, load_settings, save_settings
 from .config.users import User, UsersStore, UserStatus
@@ -73,6 +74,9 @@ class BackupApp(rumps.App):
         items.append(rumps.MenuItem("Alle jetzt synchronisieren", callback=self._sync_all))
         items.append(rumps.MenuItem("User hinzufügen…", callback=self._add_user))
         items.append(rumps.MenuItem("Einstellungen…", callback=self._open_settings))
+        autostart_item = rumps.MenuItem("Beim Login starten", callback=self._toggle_autostart)
+        autostart_item.state = 1 if autostart.is_enabled() else 0
+        items.append(autostart_item)
         self.menu = items  # Beenden wird von rumps automatisch ergänzt
         self._update_icon()
 
@@ -228,6 +232,33 @@ class BackupApp(rumps.App):
         self.settings.sync_interval_hours = hours
         save_settings(self.settings)
         notify.notify("iCloud Backup", f"Sync-Intervall: alle {hours} h.")
+
+    # -- Autostart -----------------------------------------------------------
+
+    def _toggle_autostart(self, sender) -> None:
+        if autostart.is_enabled():
+            autostart.disable()
+        else:
+            args = self._autostart_program_args()
+            if args is None:
+                rumps.alert(
+                    "Autostart nur im .app-Bundle",
+                    "Der Login-Autostart funktioniert nur fuer die gebaute App-Bundle-Version. "
+                    "Im Entwicklungsmodus (python -m src.app) ist er nicht verfuegbar.",
+                )
+                return
+            autostart.enable(args)
+        sender.state = 1 if autostart.is_enabled() else 0
+
+    @staticmethod
+    def _autostart_program_args() -> Optional[list[str]]:
+        """Programmargumente für den LaunchAgent – nur sinnvoll im gebauten Bundle.
+
+        py2app setzt ``sys.frozen``; das Bundle-Executable liegt in ``…app/Contents/MacOS/``.
+        """
+        if not getattr(sys, "frozen", False):
+            return None
+        return [sys.executable]
 
     # -- Sync-Anstoß ---------------------------------------------------------
 
