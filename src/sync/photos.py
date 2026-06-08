@@ -1,18 +1,18 @@
-"""iCloud Photos – inkrementeller, resumebarer Download der Originale.
+"""iCloud Photos – dateibasierter Sync-Spiegel der Originale.
 
-Iteriert alle Assets (``api.photos.all``, intern paginiert) und lädt jedes Original nach
-``<dest_base_path>/Photos/<YYYY>/<MM>/``. Ein Manifest (``state.photo_assets``) merkt sich
-geladene Assets, sodass Folgeläufe nur Neues holen und ein Abbruch fortgesetzt werden kann.
+Iteriert alle Assets (``api.photos.all``, intern paginiert) und spiegelt sie nach
+``<dest_base_path>/Photos/<YYYY>/<MM>/``. **Kein Manifest/sqlite** — das Dateisystem ist der
+Zustand: „schon geladen?" = Zieldatei existiert (Pfad deterministisch aus Asset-ID + Name).
 
-Spec-Entscheidungen:
+Eigenschaften:
 
-- **Originale**, nicht optimierte Versionen (Version ``'original'``).
-- **Live Photos**: Foto **und** Video sichern. Die Video-Komponente ist in pyicloud 2.6.4
-  die Version ``'original_video'`` (``resOriginalVidCompl``); sie wird zusätzlich geladen.
-- **Dateinamen-Kollisionen** (gleicher Name, anderes Asset): Ziel enthält eine kurze,
-  stabile Asset-ID als Präfix -> kollisionsfrei und deterministisch (kein Doppel-Download).
-- **Erstlauf lädt ALLES** -> resumebar über das Manifest.
-- **Speicherschonend**: Streaming über die authentifizierte Session statt voller In-Memory-Download.
+- **Originale** (Version ``'original'``), nicht optimierte Versionen.
+- **Live Photos**: Foto **und** Video. Die Video-Komponente ist Version ``'original_video'``
+  (``resOriginalVidCompl``) und wird zusätzlich geladen.
+- **Dateinamen-Kollisionen** (gleicher Name, anderes Asset): kurze, stabile Asset-ID als Präfix.
+- **Spiegel:** lokale Dateien zu Assets, die es in iCloud nicht mehr gibt, werden entfernt — aber
+  **nur** nach vollständiger, fehlerfreier Iteration und nicht-leerem Ergebnis (Guard). Historie ⇒ Snapshots.
+- **Speicherschonend**: Streaming über die authentifizierte Session.
 
 pyicloud-API (PhotoAsset, verifiziert): ``.id``, ``.filename``, ``.created`` (datetime),
 ``.is_live_photo``, ``.versions`` (dict key->{filename,url,size}), ``.download_url(version)``,
@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from . import state, util
+from . import util
 
 LOGGER = logging.getLogger(__name__)
 
@@ -39,25 +39,26 @@ _PROGRESS_EVERY = 200
 
 @dataclass
 class PhotoStats:
-    downloaded: int = 0       # Assets vollständig neu geladen
-    components: int = 0       # einzelne Dateien (Foto + ggf. Live-Video)
-    skipped: int = 0
+    downloaded: int = 0       # Assets mit mind. einer neu geladenen Datei
+    components: int = 0       # einzelne neu geladene Dateien (Foto + ggf. Live-Video)
+    skipped: int = 0          # Assets bereits vollständig vorhanden
+    deleted: int = 0
     errors: int = 0
     error_ids: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
         return (f"Photos: {self.downloaded} Assets geladen ({self.components} Dateien), "
-                f"{self.skipped} unverändert, {self.errors} Fehler")
+                f"{self.skipped} unverändert, {self.deleted} entfernt, {self.errors} Fehler")
 
 
 def _emit(stats: PhotoStats, seen: int, progress_cb) -> None:
     if progress_cb is not None:
         progress_cb({"downloaded": stats.downloaded, "skipped": stats.skipped,
-                     "errors": stats.errors, "seen": seen})
+                     "deleted": stats.deleted, "errors": stats.errors, "seen": seen})
 
 
 def sync_photos(api, dest_base_path: str, apple_id: str, progress_cb=None) -> PhotoStats:
-    """Sichert iCloud Photos inkrementell/resumebar nach ``dest_base_path/Photos``.
+    """Spiegelt iCloud Photos nach ``dest_base_path/Photos`` (dateibasiert).
 
     :param api: authentifizierte ``PyiCloudService``-Instanz.
     :param progress_cb: optionaler Callback ``cb(counts: dict)`` für Live-Fortschritt.
@@ -65,43 +66,49 @@ def sync_photos(api, dest_base_path: str, apple_id: str, progress_cb=None) -> Ph
     """
     stats = PhotoStats()
     photos_dest = Path(dest_base_path) / "Photos"
-    conn = state.connect(apple_id)
+    expected: set = set()
+    complete = True
     _emit(stats, 0, progress_cb)
+
     try:
+        album = api.photos.all
+        iterator = iter(album)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.error("Photos-Bibliothek nicht lesbar für %s: %s", apple_id, exc)
+        stats.errors += 1
+        return stats  # nicht lesbar -> niemals löschen
+
+    seen = 0
+    while True:
         try:
-            album = api.photos.all
-            iterator = iter(album)
+            asset = next(iterator)
+        except StopIteration:
+            break
         except Exception as exc:  # noqa: BLE001
-            LOGGER.error("Photos-Bibliothek nicht lesbar für %s: %s", apple_id, exc)
+            LOGGER.warning("Asset-Iteration unterbrochen: %s", exc)
             stats.errors += 1
-            return stats
+            complete = False  # unvollständig -> kein Pruning
+            break
+        seen += 1
+        if seen % _PROGRESS_EVERY == 0:
+            LOGGER.info("[%s] Photos-Fortschritt: %d gesichtet, %d geladen",
+                        apple_id, seen, stats.downloaded)
+        _sync_asset(api, asset, photos_dest, stats, expected)
+        _emit(stats, seen, progress_cb)
 
-        seen = 0
-        while True:
-            # Pagination-Fehler einzeln tolerieren, aber Endlosschleifen vermeiden.
-            try:
-                asset = next(iterator)
-            except StopIteration:
-                break
-            except Exception as exc:  # noqa: BLE001
-                LOGGER.warning("Asset-Iteration unterbrochen: %s", exc)
-                stats.errors += 1
-                break
-            seen += 1
-            if seen % _PROGRESS_EVERY == 0:
-                LOGGER.info("[%s] Photos-Fortschritt: %d gesichtet, %d geladen",
-                            apple_id, seen, stats.downloaded)
-            _sync_asset(api, asset, photos_dest, conn, stats)
-            _emit(stats, seen, progress_cb)
-
-        state.meta_set(conn, "photos_last_run", _utcnow_iso())
-        LOGGER.info("[%s] %s", apple_id, stats.summary())
-        return stats
-    finally:
-        conn.close()
+    # Spiegel: nur bei vollständiger Iteration UND nicht-leerem Ergebnis (Schutz vor Massenlöschen).
+    if complete and expected:
+        stats.deleted = util.prune_extra(photos_dest, expected)
+    elif not complete:
+        LOGGER.warning("[%s] Photos-Iteration unvollständig -> kein Löschen.", apple_id)
+    elif not expected:
+        LOGGER.warning("[%s] Photos-Liste leer -> kein Löschen (Sicherheit).", apple_id)
+    _emit(stats, seen, progress_cb)
+    LOGGER.info("[%s] %s", apple_id, stats.summary())
+    return stats
 
 
-def _sync_asset(api, asset, photos_dest: Path, conn, stats: PhotoStats) -> None:
+def _sync_asset(api, asset, photos_dest: Path, stats: PhotoStats, expected: set) -> None:
     try:
         asset_id = asset.id
         filename = asset.filename or "unbenannt"
@@ -112,44 +119,40 @@ def _sync_asset(api, asset, photos_dest: Path, conn, stats: PhotoStats) -> None:
         stats.errors += 1
         return
 
-    if state.photo_is_downloaded(conn, asset_id, created, is_live):
-        stats.skipped += 1
-        return
-
     target_dir = photos_dest / _date_folder(created)
     short = _short_id(asset_id)
-    components = 0
 
-    # 1) Hauptkomponente (Original-Foto oder -Video)
-    try:
-        main_name = _version_filename(asset, MAIN_VERSION, default=filename)
-        dest = target_dir / f"{short}_{util.safe_component(main_name)}"
-        if _download_version(api, asset, MAIN_VERSION, dest, created):
-            components += 1
-    except Exception as exc:  # noqa: BLE001
-        LOGGER.warning("Original fehlgeschlagen %s (%s): %s", filename, asset_id, exc)
-        stats.errors += 1
-        stats.error_ids.append(asset_id)
-        return  # ohne Original kein vollständiges Asset
-
-    # 2) Live-Photo-Video-Komponente (zusätzlich)
+    # Zu sichernde Komponenten bestimmen: (Version, Zielpfad)
+    components = [(MAIN_VERSION,
+                   target_dir / f"{short}_{util.safe_component(_version_filename(asset, MAIN_VERSION, filename))}")]
     if is_live:
+        components.append(
+            (LIVE_VIDEO_VERSION,
+             target_dir / f"{short}_{util.safe_component(_version_filename(asset, LIVE_VIDEO_VERSION, _with_suffix(filename, '.MOV')))}"))
+
+    # Alle erwarteten Pfade schützen (vor Pruning), unabhängig vom Download-Erfolg.
+    for _v, dest in components:
+        expected.add(dest)
+
+    newly = 0
+    for version, dest in components:
+        if dest.exists():
+            continue  # bereits vorhanden -> Dateisystem ist der Zustand
         try:
-            vid_name = _version_filename(asset, LIVE_VIDEO_VERSION,
-                                         default=_with_suffix(filename, ".MOV"))
-            vdest = target_dir / f"{short}_{util.safe_component(vid_name)}"
-            if _download_version(api, asset, LIVE_VIDEO_VERSION, vdest, created):
-                components += 1
-        except Exception as exc:  # noqa: BLE001 - Foto ist da; Video-Fehler nicht fatal
-            LOGGER.warning("Live-Video fehlgeschlagen %s (%s): %s", filename, asset_id, exc)
+            if _download_version(api, asset, version, dest, created):
+                newly += 1
+                stats.components += 1
+        except Exception as exc:  # noqa: BLE001 - einzelne Datei darf den Lauf nicht kippen
+            LOGGER.warning("Download fehlgeschlagen %s (%s, %s): %s", filename, asset_id, version, exc)
             stats.errors += 1
             stats.error_ids.append(asset_id)
-            # Asset NICHT als vollständig markieren -> nächster Lauf versucht das Video erneut.
-            return
+            if version == MAIN_VERSION:
+                return  # ohne Original kein vollständiges Asset
 
-    state.photo_record(conn, asset_id, filename, created, has_video=is_live, downloaded=True)
-    stats.downloaded += 1
-    stats.components += components
+    if newly:
+        stats.downloaded += 1
+    else:
+        stats.skipped += 1
 
 
 def _download_version(api, asset, version: str, dest: Path, created) -> bool:
@@ -224,8 +227,3 @@ def _short_id(asset_id: str) -> str:
 def _with_suffix(filename: str, suffix: str) -> str:
     stem = filename.rsplit(".", 1)[0] if "." in filename else filename
     return stem + suffix
-
-
-def _utcnow_iso() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).isoformat()

@@ -140,6 +140,83 @@ def write_empty_file(dest: Path) -> None:
     _atomic_write(dest, lambda fh: None)
 
 
+def write_bytes(dest: Path, data: bytes) -> int:
+    """Schreibt ``data`` atomar (`.part`+rename) nach ``dest`` und liefert die Byte-Anzahl."""
+    _atomic_write(dest, lambda fh: fh.write(data))
+    return len(data)
+
+
+# Toleranz beim mtime-Vergleich (Dateisysteme/SMB runden teils auf ganze Sekunden).
+_MTIME_TOLERANCE_S = 2.0
+
+
+def needs_download(dest: Path, size: Optional[int], date_modified: Optional[datetime]) -> bool:
+    """Dateibasierte Entscheidung (rsync-artig), ob ``dest`` (neu) geladen werden muss.
+
+    True, wenn die Zieldatei fehlt, die Größe abweicht oder die Änderungszeit mehr als
+    :data:`_MTIME_TOLERANCE_S` von ``date_modified`` abweicht. Ohne Server-Metadaten
+    (``size``/``date_modified`` ``None``) entscheidet allein die Existenz.
+    """
+    try:
+        st = dest.stat()
+    except OSError:
+        return True  # fehlt -> laden
+    if size is not None and st.st_size != size:
+        return True
+    if date_modified is not None:
+        try:
+            if abs(st.st_mtime - date_modified.timestamp()) > _MTIME_TOLERANCE_S:
+                return True
+        except (ValueError, OverflowError, OSError):
+            return True
+    return False
+
+
+def prune_extra(root: Path, expected: set[Path]) -> int:
+    """Spiegel-Helfer: löscht unter ``root`` alle Dateien, die NICHT in ``expected`` liegen.
+
+    Entfernt anschließend leer gewordene Verzeichnisse. Liefert die Anzahl gelöschter Dateien.
+    ``.part``-Reste werden ebenfalls entfernt.
+
+    **Sicherheit:** Nur mit einem *vollständigen* ``expected``-Set aufrufen (der Aufrufer muss
+    sichergestellt haben, dass das Server-Listing fehlerfrei und vollständig war) — sonst würde
+    legitim vorhandener Inhalt gelöscht.
+    """
+    if not root.is_dir():
+        return 0
+    expected_resolved = {p.resolve() for p in expected}
+    deleted = 0
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for name in filenames:
+            fpath = Path(dirpath) / name
+            if fpath.resolve() in expected_resolved:
+                continue
+            try:
+                fpath.unlink()
+                deleted += 1
+            except OSError as exc:
+                LOGGER.warning("Konnte überzählige Datei nicht löschen %s: %s", fpath, exc)
+    _remove_empty_dirs(root)
+    return deleted
+
+
+def _remove_empty_dirs(root: Path) -> None:
+    """Entfernt leere Unterverzeichnisse unter ``root`` (``root`` selbst bleibt erhalten)."""
+    for dirpath, _dirnames, _filenames in os.walk(root, topdown=False):
+        d = Path(dirpath)
+        if d == root:
+            continue
+        try:
+            next(d.iterdir())
+        except StopIteration:
+            try:
+                d.rmdir()
+            except OSError:
+                pass
+        except OSError:
+            pass
+
+
 def set_mtime(dest: Path, when: Optional[datetime]) -> None:
     """Setzt die Änderungszeit der Datei auf ``when`` (best-effort, Fehler werden ignoriert)."""
     if when is None:

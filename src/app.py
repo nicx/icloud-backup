@@ -105,10 +105,14 @@ class BackupApp(rumps.App):
         parent = rumps.MenuItem(f"{symbol} {user.apple_id}{last}")
         parent.add(rumps.MenuItem("Sync jetzt", callback=partial(self._sync_one, user.apple_id)))
         parent.add(rumps.MenuItem("Re-Auth…", callback=partial(self._reauth, user.apple_id)))
+        parent.add(rumps.MenuItem("Mail-App-Passwort setzen…",
+                                  callback=partial(self._set_mail_password, user.apple_id)))
         parent.add(rumps.MenuItem("Zielordner ändern…", callback=partial(self._change_dest, user.apple_id)))
-        dest_label = rumps.MenuItem(f"Ziel: {user.dest_base_path or '—'}")
-        dest_label.set_callback(None)  # nur Info, nicht klickbar
-        parent.add(dest_label)
+        services = ", ".join(s for s, on in (("Drive", user.sync_drive), ("Photos", user.sync_photos),
+                                             ("Mail", user.sync_mail)) if on) or "—"
+        info = rumps.MenuItem(f"Dienste: {services}  ·  Ziel: {user.dest_base_path or '—'}")
+        info.set_callback(None)  # nur Info, nicht klickbar
+        parent.add(info)
         parent.add(rumps.separator)
         parent.add(rumps.MenuItem("Entfernen…", callback=partial(self._remove_user, user.apple_id)))
         self._user_items[user.apple_id] = parent
@@ -210,43 +214,61 @@ class BackupApp(rumps.App):
         if self.store.get(apple_id) is not None:
             rumps.alert("Bereits vorhanden", f"{apple_id} ist schon konfiguriert.")
             return
-        password = self._ask_text("Passwort (wird nur im macOS-Keychain gespeichert):",
-                                   "User hinzufügen", secure=True)
-        if not password:
-            return
         dest = self._ask_directory(f"Ziel-Ordner für das Backup von {apple_id} wählen "
                                    "(z. B. auf dem UNAS-Volume):")
         if not dest:
             return
         sync_drive = self._ask_yes_no("iCloud Drive sichern?", "User hinzufügen")
         sync_photos = self._ask_yes_no("iCloud Photos sichern?", "User hinzufügen")
-
-        # Passwort sofort in den Keychain, dann Login versuchen.
-        keychain.set_password(apple_id, password)
-        result = session.login(apple_id, password)
-
-        if result.error:
-            keychain.delete_password(apple_id)
-            rumps.alert("Login fehlgeschlagen", result.error)
+        sync_mail = self._ask_yes_no("iCloud Mail sichern? (braucht ein app-spezifisches Passwort)",
+                                     "User hinzufügen")
+        if not (sync_drive or sync_photos or sync_mail):
+            rumps.alert("Nichts ausgewählt", "Es wurde kein Dienst zum Sichern gewählt.")
             return
 
-        user = User(
-            apple_id=apple_id,
-            sync_drive=sync_drive,
-            sync_photos=sync_photos,
-            dest_base_path=dest,
-            status=UserStatus.IDLE,
-        )
+        user = User(apple_id=apple_id, sync_drive=sync_drive, sync_photos=sync_photos,
+                    sync_mail=sync_mail, dest_base_path=dest, status=UserStatus.IDLE)
+        status = UserStatus.OK
 
-        if result.needs_2fa:
-            if not self._complete_2fa(result.api, apple_id):
-                user.status = UserStatus.NEEDS_REAUTH
-        else:
-            user.status = UserStatus.OK
+        # Web-Passwort + Login nur, wenn Drive/Photos gewünscht.
+        if sync_drive or sync_photos:
+            password = self._ask_text("Apple-ID-Passwort (für Drive/Photos; nur im macOS-Keychain):",
+                                       "User hinzufügen", secure=True)
+            if not password:
+                rumps.alert("Kein Passwort", "Ohne Apple-ID-Passwort kein Drive/Photos-Sync.")
+                return
+            keychain.set_password(apple_id, password)
+            result = session.login(apple_id, password)
+            if result.error:
+                keychain.delete_password(apple_id)
+                rumps.alert("Login fehlgeschlagen", result.error)
+                return
+            if result.needs_2fa and not self._complete_2fa(result.api, apple_id):
+                status = UserStatus.NEEDS_REAUTH
 
+        # Mail: app-spezifisches Passwort.
+        if sync_mail:
+            if not self._prompt_mail_password(apple_id):
+                user.sync_mail = False
+                rumps.alert("Mail übersprungen",
+                            "Ohne app-spezifisches Passwort wird Mail nicht gesichert. "
+                            "Du kannst es spaeter ueber 'Mail-App-Passwort setzen...' nachholen.")
+
+        user.status = status
         self.store.add(user)
         self._rebuild_menu()
         notify.notify("iCloud Backup", f"User {apple_id} hinzugefügt ({user.status.value}).")
+
+    def _prompt_mail_password(self, apple_id: str) -> bool:
+        """Fragt das app-spezifische Mail-Passwort ab und legt es im Keychain ab. True bei Erfolg."""
+        app_pw = self._ask_text(
+            "App-spezifisches Passwort für iCloud Mail.\n"
+            "Auf appleid.apple.com → Anmeldung & Sicherheit → App-spezifische Passwörter erzeugen.",
+            "iCloud Mail – App-Passwort", secure=True)
+        if not app_pw:
+            return False
+        keychain.set_mail_password(apple_id, app_pw)
+        return True
 
     def _complete_2fa(self, api, apple_id: str) -> bool:
         """Fragt den 2FA-Code ab und vertraut der Session. True bei Erfolg."""
@@ -283,6 +305,19 @@ class BackupApp(rumps.App):
             self.store.set_status(apple_id, UserStatus.OK)
         self._rebuild_menu()
 
+    def _set_mail_password(self, apple_id: str, _sender=None) -> None:
+        """Mail-App-Passwort setzen/aktualisieren und Mail für den User aktivieren."""
+        user = self.store.get(apple_id)
+        if user is None:
+            return
+        if not self._prompt_mail_password(apple_id):
+            return
+        if not user.sync_mail:
+            user.sync_mail = True
+            self.store.update(user)
+        self._rebuild_menu()
+        notify.notify("iCloud Backup", f"Mail-App-Passwort für {apple_id} gespeichert.")
+
     def _change_dest(self, apple_id: str, _sender=None) -> None:
         user = self.store.get(apple_id)
         if user is None:
@@ -301,6 +336,7 @@ class BackupApp(rumps.App):
             return
         self.store.remove(apple_id)
         keychain.delete_password(apple_id)
+        keychain.delete_mail_password(apple_id)
         self._rebuild_menu()
 
     # -- Einstellungen -------------------------------------------------------
@@ -400,6 +436,9 @@ class BackupApp(rumps.App):
         ph = p.get("photos")
         if ph:
             parts.append(f"Photos {ph.get('downloaded', 0)}↓ / {ph.get('seen', 0)} gepr.")
+        ml = p.get("mail")
+        if ml:
+            parts.append(f"Mail {ml.get('downloaded', 0)}↓ ({ml.get('folders', 0)} Ordner)")
         detail = "  ".join(parts) if parts else "startet…"
         return f"⟳ {apple_id} – {detail}"
 

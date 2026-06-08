@@ -1,19 +1,30 @@
 # iCloud Multi-User Backup
 
-Native macOS-**Menüleisten-App**, die täglich (konfigurierbar, Default alle 4 h) die iCloud-Daten
-**mehrerer Apple-Accounts** inkrementell auf ein Netzlaufwerk (z. B. UNAS Pro) sichert:
+Native macOS-**Menüleisten-App**, die regelmäßig (konfigurierbar, Default alle 4 h) die iCloud-Daten
+**mehrerer Apple-Accounts** auf ein Netzlaufwerk (z. B. UNAS Pro) spiegelt:
 
 - **iCloud Drive** (Dokumente)
 - **iCloud Photos** (Originale, inkl. Live Photos)
+- **iCloud Mail** (alle Ordner, als `.eml`)
 
-Backup ist **additiv** — eine in iCloud gelöschte Datei wird im Backup nicht gelöscht.
-Zugriff erfolgt über die inoffizielle iCloud-Web-API ([pyicloud](https://github.com/timlaing/pyicloud)),
-damit mehrere Accounts aus einem Prozess heraus gesichert werden können — ohne PhotoKit,
-Full-Disk-Access oder pro Account einen eigenen macOS-User.
+Drive und Photos laufen über die inoffizielle iCloud-Web-API
+([pyicloud](https://github.com/timlaing/pyicloud)); Mail über **IMAP** (Bordmittel `imaplib`).
+So lassen sich mehrere Accounts aus einem Prozess sichern — ohne PhotoKit, Full-Disk-Access oder
+pro Account einen eigenen macOS-User.
 
-> **Status:** Phase 2. Config-/Keychain-Schicht, Auth-/Re-Auth-Layer, Menüleisten-App mit
-> User-Verwaltung **und die inkrementelle, resumebare Sync-Engine (Drive + Photos)** sind
-> implementiert und mit Mock-Tests abgedeckt. Offen bleiben py2app-Build und Login-Autostart.
+## Sync-Modell (Spiegel, kein additives Backup)
+
+Der lokale Stand ist ein **Spiegel des aktuellen iCloud-Zustands**: Was in iCloud gelöscht oder
+verschoben wird, wird beim nächsten Lauf **auch lokal entfernt/verschoben** (kein Duplikat-Wuchs).
+**Versionierung/Historie übernehmen UNAS-Snapshots** (copy-on-write) — die zeigen jeden früheren
+Stand und können einzelne Dateien/Stände wiederherstellen.
+
+> Das weicht bewusst von der ursprünglichen Bau-Spec (`CLAUDE.md`, „additiv") ab.
+>
+> **Sicherheit beim Löschen:** Lokal gelöscht wird **nur** innerhalb von `Drive/`, `Photos/`, `Mail/`
+> und **nur nach einem vollständigen, fehlerfreien Server-Listing**. Bei Verbindungs-/Listing-Fehler
+> oder unplausibel leerem Ergebnis wird **nichts** gelöscht (nur geladen). Es gibt **kein** sqlite —
+> das Dateisystem ist der Zustand (reiner Datei-Sync).
 
 ## Voraussetzungen
 
@@ -32,12 +43,24 @@ Full-Disk-Access oder pro Account einen eigenen macOS-User.
 ```
 
 Beim ersten Start erscheint das Menüleisten-Icon. Über **„User hinzufügen…"** wird ein Apple-Account
-angelegt: Apple-ID, Passwort (landet ausschließlich im macOS-Keychain), Ziel-Ordner (per **Finder-Dialog**
-auswählbar) und Drive/Photos-Auswahl. Der Zielordner lässt sich später jederzeit über den Menüpunkt
-**„Zielordner ändern…"** im jeweiligen User-Untermenü anpassen.
-Apple verlangt eine **2FA-Bestätigung** — der Code wird im Dialog eingegeben. Die Trusted-Session wird
-danach persistiert (`~/Library/Application Support/icloud-backup/sessions/<apple-id>/`), sodass folgende
-Starts in der Regel ohne erneute 2FA auskommen.
+angelegt: Apple-ID, Ziel-Ordner (per **Finder-Dialog** auswählbar) und die Auswahl Drive/Photos/Mail.
+Für **Drive/Photos** wird das Apple-ID-Passwort abgefragt (nur Keychain) und Apple verlangt eine
+**2FA-Bestätigung** — der Code wird im Dialog eingegeben; die Trusted-Session wird danach persistiert
+(`…/sessions/<apple-id>/`), sodass folgende Starts meist ohne erneute 2FA auskommen. Für **Mail** wird
+stattdessen ein **app-spezifisches Passwort** abgefragt (siehe unten). Der Zielordner lässt sich später
+über **„Zielordner ändern…"** anpassen.
+
+### iCloud Mail (IMAP) einrichten
+
+Apple lässt IMAP-Zugriff nur mit einem **app-spezifischen Passwort** zu (das normale Passwort wird
+abgelehnt). Einmal pro Account:
+
+1. [appleid.apple.com](https://appleid.apple.com) → **Anmeldung & Sicherheit** → **App-spezifische Passwörter** → eines erzeugen.
+2. In der App im User-Untermenü **„Mail-App-Passwort setzen…"** (oder beim Anlegen) das Passwort eingeben.
+
+Mail wird nach `Mail/<Ordner>/<uid>.eml` gespiegelt — **echte Ordnerstruktur** wie in iCloud Mail.
+Nachrichten werden mit `BODY.PEEK[]` geladen und bleiben dadurch **ungelesen**. Der Mail-Sync läuft
+**unabhängig** von der Drive/Photos-Web-Session (auch wenn die gerade ein Re-Auth braucht).
 
 ### Re-Auth
 
@@ -53,8 +76,8 @@ laufen davon unbeeinflusst weiter.
 | Globale Settings | `~/Library/Application Support/icloud-backup/settings.json` |
 | User-Liste (ohne Passwort) | `~/Library/Application Support/icloud-backup/users.json` |
 | Trusted-Session-Cookies | `~/Library/Application Support/icloud-backup/sessions/<apple-id>/` |
-| Sync-Manifest (sqlite) | `~/Library/Application Support/icloud-backup/state/<apple-id>.sqlite` |
-| Passwörter | macOS-Keychain (Service `icloud-backup`) |
+| Apple-ID-Passwort (Drive/Photos) | macOS-Keychain (Service `icloud-backup`) |
+| App-spezifisches Passwort (Mail) | macOS-Keychain (Service `icloud-backup-mail`) |
 
 ### Backup-Ablage auf dem Ziel-Volume
 
@@ -62,12 +85,13 @@ laufen davon unbeeinflusst weiter.
 <dest_base_path>/
   Drive/<originale Ordnerstruktur>/...          # 1:1-Spiegel des iCloud-Drive-Baums
   Photos/<JJJJ>/<MM>/<kurz-id>_<dateiname>      # nach Erstelldatum; Asset-ID-Präfix gegen Kollisionen
+  Mail/<Ordner>/<uid>.eml                       # echte iCloud-Ordnerstruktur, rohe RFC822-Mails
 ```
 
-Der Sync ist **inkrementell** (nur Neues/Geändertes, Abgleich über das sqlite-Manifest),
-**resumebar** (Download nach `.part` + atomarer Rename; Manifest erst nach Erfolg) und
-**additiv** (in iCloud Gelöschtes bleibt im Backup). Live Photos werden als Foto **und** Video
-gesichert. Bei Throttling greift exponentielles Backoff.
+Der Sync ist **inkrementell** (Drive: Vergleich über Größe/Änderungszeit; Photos/Mail: Existenz der
+Zieldatei), **resumebar** (Download nach `.part` + atomarer Rename) und ein **Spiegel** (in iCloud
+Gelöschtes/Verschobenes wird nachgezogen — Historie via Snapshots). Live Photos werden als Foto **und**
+Video gesichert. Bei Throttling greift exponentielles Backoff.
 
 ## Tests
 

@@ -35,6 +35,7 @@ class User:
     :param apple_id: Apple-ID (E-Mail). Dient als eindeutiger Schlüssel.
     :param sync_drive: iCloud Drive sichern?
     :param sync_photos: iCloud Photos sichern?
+    :param sync_mail: iCloud Mail (IMAP) sichern? Default aus (braucht app-spezifisches Passwort).
     :param dest_base_path: Ziel-Basispfad auf dem (gemounteten) Volume.
     :param status: aktueller :class:`UserStatus`.
     :param last_run: ISO-8601-Zeitstempel des letzten erfolgreichen Laufbeginns (oder None).
@@ -43,6 +44,7 @@ class User:
     apple_id: str
     sync_drive: bool = True
     sync_photos: bool = True
+    sync_mail: bool = False
     dest_base_path: str = ""
     status: UserStatus = UserStatus.IDLE
     last_run: Optional[str] = None
@@ -63,6 +65,7 @@ class User:
             apple_id=raw["apple_id"],
             sync_drive=bool(raw.get("sync_drive", True)),
             sync_photos=bool(raw.get("sync_photos", True)),
+            sync_mail=bool(raw.get("sync_mail", False)),
             dest_base_path=raw.get("dest_base_path", ""),
             status=status_enum,
             last_run=raw.get("last_run"),

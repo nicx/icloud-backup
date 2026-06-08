@@ -51,13 +51,6 @@ def session_dir(apple_id: str) -> Path:
     return d
 
 
-def state_db(apple_id: str) -> Path:
-    """Pfad zur sqlite-Manifest-Datei eines Users (Verzeichnis wird angelegt)."""
-    d = app_support_dir() / "state"
-    d.mkdir(parents=True, exist_ok=True)
-    return d / f"{_safe_name(apple_id)}.sqlite"
-
-
 def logs_dir() -> Path:
     """Verzeichnis für Logdateien (wird bei Bedarf angelegt)."""
     d = app_support_dir() / "logs"
