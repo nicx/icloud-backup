@@ -1,183 +1,231 @@
-# iCloud Multi-User Backup – Bau-Spec für Claude Code
+# iCloud Sync – Projektdokumentation (Ist-Stand)
 
-Übergabe-Brief. Lege diese Datei als `CLAUDE.md` in einen leeren Projektordner und
-gib Claude Code als ersten Auftrag: *„Lies CLAUDE.md und lege die Projektstruktur an.
-Beginne mit User-Config-Modell, Session/Re-Auth-Handling und einem lauffähigen
-Menüleisten-Skelett. Frag nach, wo Entscheidungen offen sind."*
+Native macOS-**Menüleisten-App** (`.app`-Bundle), die die iCloud-Daten **mehrerer
+Apple-Accounts** auf ein gemountetes Volume (UNAS Pro) spiegelt — als
+**dateibasierter Sync-Spiegel**, kein additives Backup.
+
+> Diese Datei beschreibt den **aktuellen Stand** des Codes (nicht mehr den
+> ursprünglichen Bau-Auftrag). Bei Änderungen am Verhalten bitte hier mitziehen.
+> Wo Entscheidungen offen sind: nachfragen, nicht raten.
 
 ---
 
 ## Ziel
 
-Eine **native macOS Doppelklick-App** (`.app`-Bundle), die als **Menüleisten-App**
-läuft und täglich **inkrementell** die iCloud-Daten **mehrerer Apple-Accounts**
-sichert:
+Täglicher/periodischer, **inkrementeller, resumebarer** Spiegel der iCloud-Daten
+mehrerer Accounts:
 
 - **iCloud Drive** (Dokumente)
-- **iCloud Photos** (Fotos/Videos, Originale)
+- **iCloud Photos** (Originale, inkl. Live Photos)
+- **iCloud Mail** (IMAP, rohe `.eml` je Ordner)
 
 Ziel-Speicher: **UNAS Pro** (gemountetes Netzlaufwerk, Pfad pro User konfigurierbar).
-Backup ist **additiv** (eine gelöschte iCloud-Datei wird im Backup NICHT gelöscht).
 
-## Rahmenbedingungen (bereits entschieden)
+### Lösch-Semantik: Spiegel, nicht additiv
+
+**Wichtig — bewusste Abkehr vom ursprünglichen Spec:** Das Backup ist ein
+**Spiegel**. Eine serverseitig gelöschte/verschobene Datei wird **lokal ebenfalls
+entfernt**. Historie/Versionierung übernehmen die **UNAS-Snapshots**, nicht ein
+additives Anhäufen im Zielordner.
+
+Das Löschen ist streng **geguarded** (siehe `sync/util.py::prune_extra`): es passiert
+**nur** nach einem *vollständigen, fehlerfreien* Server-Listing. Sobald ein Ordner-
+Listing / eine Iteration / ein IMAP-SEARCH fehlschlägt, wird in diesem Lauf **nichts**
+gelöscht (nur heruntergeladen). Bei Photos zusätzlich: leeres Ergebnis ⇒ kein Löschen.
+Damit kann ein API-Aussetzer keinen Massenverlust auslösen.
+
+## Rahmenbedingungen (entschieden)
 
 - Läuft auf einem **24/7 Mac**.
 - **Kein** Account hat Advanced Data Protection aktiv → Web-API ist nutzbar.
-- Zugriff über die **inoffizielle iCloud-Web-API** (pyicloud-Stil), NICHT über
-  PhotoKit/lokales Dateisystem. Grund: Mehrere Accounts aus einem Prozess heraus,
-  ohne pro Account einen eigenen macOS-User einloggen zu müssen.
+- Drive/Photos über die **inoffizielle iCloud-Web-API** (`pyicloud`, in **2.6.4**
+  verifiziert). Mail über **IMAP** (`imap.mail.me.com`), unabhängig von der Web-Session.
 - **Doppelklick-App**, kein Script. Verpackung via py2app zu echtem `.app`.
+- **In-App-Scheduler mit Catch-up** (ein Prozess), kein separater LaunchAgent für den
+  Sync. Ein LaunchAgent wird nur für den **Login-Autostart** der App selbst genutzt.
 
 ## Tech-Stack
 
-- **Python 3.12+**
+- **Python 3.13** (im `.venv`; ≥ 3.12 vorausgesetzt)
 - **rumps** – Menüleisten-UI (Status-Bar, Popover, Notifications)
-- **pyicloud** – iCloud Web-API (Drive + Photos). Aktuelle, gepflegte Version
-  prüfen; Auth-Verhalten kann sich ändern.
+- **pyicloud** (2.6.4) – iCloud Web-API (Drive + Photos)
+- **imaplib** (stdlib) – iCloud Mail
 - **keyring** – Credentials im macOS-Keychain
-- **sqlite3** (stdlib) – Sync-State / Manifest pro User
+- **pyobjc** (AppKit/Foundation) – nativer Ordner-Dialog (NSOpenPanel), Menüleisten-Icon
 - **py2app** – Bau des `.app`-Bundles
-- macOS-Notifications via rumps / `pync` als Fallback
+- macOS-Notifications via rumps, `pync` als Fallback
+
+> **Kein sqlite.** Der ursprüngliche Spec sah ein sqlite-Manifest (`sync/state.py`) vor;
+> das ist entfallen. Der Zustand ist allein das Dateisystem des Zielordners.
 
 ## Architektur
 
 Ein einziges `.app`-Bundle, das **als Menüleisten-Resident dauerhaft läuft**
-(`LSUIElement=True` → kein Dock-Icon, kein Fenster). Es startet automatisch beim
-Login (SMAppService bzw. ein simpler LaunchAgent, der nur die App startet).
+(`LSUIElement=True` → kein Dock-Icon, kein Fenster). Login-Autostart optional per
+In-App-Toggle (LaunchAgent).
 
 Trennung im Code, NICHT in separate Prozesse:
 
-- **UI-Schicht** (`app.py`, rumps): Status anzeigen, User verwalten, „Sync jetzt",
-  Re-Auth-Prompt. Hält keine Sync-Logik.
-- **Scheduler**: In-App-Timer, der einmal täglich (konfigurierbare Uhrzeit) den
-  Sync anstößt. **Missed-Run-Catch-up**: Wenn `last_run` > 24 h zurückliegt
-  (Mac war im Sleep), beim nächsten Wake nachholen. Sync läuft im
-  Hintergrund-Thread/Subprocess, damit das UI nicht blockiert.
-- **Sync-Engine** (`sync/engine.py`): Orchestriert pro User Drive + Photos.
-  Muss als eigenständiges Modul auch ohne UI aufrufbar sein (für Tests/Debug).
-
-> Entscheidungspunkt für Claude Code & mich: In-App-Scheduler mit Catch-up
-> (einfacher, ein Prozess) **vs.** zusätzlicher LaunchAgent mit
-> `StartCalendarInterval` (robuster bei Sleep/Wake, aber zwei Prozesse).
-> Default-Empfehlung: In-App-Scheduler mit Catch-up. Nicht ohne Rückfrage anders bauen.
+- **UI-Schicht** (`src/app.py`, rumps): Status anzeigen, User verwalten, „Sync jetzt",
+  Re-Auth-/Mail-Passwort-Prompts, Live-Fortschritt (Spinner + Counts). Hält keine
+  Sync-Logik. Syncs laufen in einem Hintergrund-Thread (Daemon), serialisiert über ein
+  `threading.Lock` (keine überlappenden Läufe).
+- **Scheduler** (in `app.py`): zwei `rumps.Timer`. Ein langsamer Tick (300 s) prüft
+  „fällige" User und stößt den Sync an; ein schneller Tick (1 s) aktualisiert nur die
+  Live-Anzeige. **Missed-Run-Catch-up**: Fälligkeit = `now - last_run >=
+  sync_interval_hours` (Default 4 h) — war der Mac im Sleep, ist `last_run` alt und der
+  User sofort fällig. `needs_reauth`/`error`-User werden nicht automatisch gesynct.
+- **Sync-Engine** (`src/sync/engine.py`): orchestriert pro User Mount-Check →
+  Drive/Photos (Web) → Mail (IMAP). Eigenständig ohne UI aufrufbar (Tests/Debug). Ein
+  Fehler bei einem User/Dienst stoppt die anderen nicht. **Mail läuft unabhängig von der
+  Web-Session** — auch wenn Drive/Photos gerade Re-Auth brauchen, wird Mail gesichert.
 
 ## Projektstruktur
 
 ```
-icloud-backup/
+icloud-sync/
   CLAUDE.md                # diese Datei
-  requirements.txt
+  README.md                # Build, Ad-hoc-Signing, Gatekeeper, Mount-Voraussetzung
+  launcher.py              # py2app-Entrypoint (ruft src.app.main)
+  requirements.txt         # Laufzeit-Abhängigkeiten
+  requirements-build.txt   # zusätzlich für den py2app-Build
   src/
-    app.py                 # rumps-Entrypoint, Menüleiste, Scheduler
-    notify.py              # macOS-Notifications (Re-Auth, Fehler, Erfolg)
+    app.py                 # rumps-Entrypoint, Menüleiste, Scheduler, Live-Fortschritt
+    notify.py              # macOS-Notifications (rumps / pync-Fallback)
+    menubar_icon.py        # erzeugt/lädt das Template-Image fürs Menüleisten-Icon
+    autostart.py           # Login-Autostart via LaunchAgent (In-App-Toggle)
     config/
-      users.py             # User-Modell: add/configure/list/remove
-      settings.py          # globale Settings (Uhrzeit, Pfade)
+      users.py             # User-Modell + UsersStore (JSON-Persistenz, kein Passwort)
+      settings.py          # globale Settings (Sync-Intervall, autostart, notifications)
+      paths.py             # App-Support-Pfade, Pro-User-Cookie-Dir, Legacy-Migration
     auth/
-      session.py           # pyicloud-Session, Cookie-Persistenz, Re-Auth-Flow
-      keychain.py          # Credential-Storage via keyring
+      session.py           # EINZIGE pyicloud-Stelle: Login, 2FA, Re-Auth, Cookie-Persistenz
+      keychain.py          # Credential-Storage via keyring (Web-PW + Mail-App-PW)
     sync/
-      engine.py            # Orchestrierung pro User
-      drive.py             # iCloud Drive inkrementell
-      photos.py            # iCloud Photos inkrementell
-      state.py             # sqlite-Manifest + last_run pro User
+      engine.py            # Orchestrierung pro User (Drive + Photos + Mail)
+      drive.py             # iCloud Drive – Datei-Spiegel
+      photos.py            # iCloud Photos – Datei-Spiegel (Originale + Live-Video)
+      mail.py              # iCloud Mail – IMAP-Datei-Spiegel (.eml)
+      util.py              # geteilte Helfer: Pfad-Hygiene, Retry/Backoff, Streaming, prune
   build/
-    setup.py               # py2app-Config (LSUIElement, Icon, Bundle-ID)
+    setup.py               # py2app-Config (LSUIElement, Icon, Bundle-ID de.nicx.icloud-sync)
+    icon.icns              # App-Icon (falls vorhanden)
+  tests/
+    test_sync.py           # mock-basierte Tests (kein Netz/Account); .venv/bin/python tests/test_sync.py
 ```
 
-## User-Modell
+## User-Modell (`config/users.py`)
 
-Pro User konfigurierbar in der App:
+Pro User (`User`-Dataclass, persistiert als `users.json` in App Support):
 
-- Apple-ID (E-Mail)
-- Passwort → **nur** im Keychain, nie im Klartext/Config
-- Was sichern: Drive ja/nein, Photos ja/nein
-- Ziel-Basispfad auf UNAS Pro (z. B. `/Volumes/backup/icloud/<user>/`)
-- Status: `ok` / `needs_reauth` / `error` / `running` + `last_run`-Timestamp
+- `apple_id` (E-Mail) — eindeutiger Schlüssel
+- `sync_drive`, `sync_photos` (Default an), `sync_mail` (Default **aus** — braucht
+  app-spezifisches Passwort)
+- `dest_base_path` — Ziel-Basispfad auf dem (gemounteten) Volume; darunter legt die
+  Engine `Drive/`, `Photos/`, `Mail/` an
+- `status`: `idle` / `running` / `ok` / `needs_reauth` / `error`
+- `last_run`: ISO-8601-Zeitstempel (UTC) des letzten erfolgreichen Laufbeginns
 
-Mehrere User → Liste; Sync läuft sequenziell durch alle aktiven User.
+Passwörter stehen **nie** in `users.json` — nur im Keychain.
 
-## Inkrementelle Logik
+## Credentials (`auth/keychain.py`)
 
-**Drive**: pyicloud Drive-Tree rekursiv durchlaufen. Pro Datei in sqlite Pfad,
-Größe, `date_modified`, Hash/etag (falls verfügbar) führen. Nur laden, wenn neu
-oder geändert. Resumebar (Abbruch darf nächsten Lauf nicht zerstören).
+Zwei Keychain-Services, Account-Schlüssel ist jeweils die Apple-ID:
 
-**Photos**: pyicloud Photos-API, Assets iterieren (paginiert!). Pro Asset
-`asset_id`, Original-Dateiname, `created`/`modified`, `downloaded`-Flag in sqlite.
-Nur neue/geänderte Assets laden. Beachten:
+- `icloud-sync` — reguläres Apple-ID-Passwort (Web-API: Drive/Photos)
+- `icloud-sync-mail` — **app-spezifisches** Passwort (IMAP; reguläres PW wird von Apple
+  im IMAP abgelehnt)
 
-- **Erstlauf lädt ALLES** (ganze Mediathek, evtl. sehr groß/lang) → muss
-  resumebar sein, Fortschritt in sqlite persistieren.
-- **Dateinamen-Kollisionen**: gleicher Name, anderes Asset → Asset-ID in Pfad
-  aufnehmen oder dedupen.
-- **Live Photos / HEIC**: Live Photo = zwei Dateien (Foto + Video).
-  Entscheidung: beide sichern. Bitte als Default umsetzen, kommentieren.
-- Originale, nicht optimierte Versionen.
+Beim Lesen wird transparent auf die Alt-Services (`icloud-backup` / `-mail` vor der
+Umbenennung) zurückgegriffen und der Eintrag migriert.
 
-## Re-Auth-Handling (kritischster Teil)
+## Inkrementelle Logik (dateibasiert, kein Manifest)
 
-Die Web-API-Sessions laufen ab; Apple verlangt periodisch eine neue 2FA-Bestätigung.
-Das ist **nicht** automatisierbar – der Code kommt aufs Apple-Gerät des Users.
-Anforderungen:
+Gemeinsames Prinzip: **Das Dateisystem ist der Zustand.** „Schon geladen?" =
+Zieldatei existiert / stimmt in Größe+mtime. Spiegeln = Überzähliges (geguarded) löschen.
 
-- Trusted-Session-Cookies pro User persistieren (App-Support-Verzeichnis, nicht
-  bei Update verlieren).
-- Abgelaufene Session erkennen → User-Status auf `needs_reauth`, **roter Punkt /
-  Badge** im Menüleisten-Icon, macOS-**Notification**.
-- Re-Auth-Flow im UI: Eingabefeld für den 2FA-Code, danach Session erneuern.
-- Sync für betroffenen User aussetzen, andere User laufen normal weiter.
+**Drive** (`sync/drive.py`): rekursiver Walk über den Drive-Tree (Tiefenlimit 64,
+`trash`/`unknown` übersprungen). Download-Entscheidung via `util.needs_download`
+(fehlt / Größe ≠ / mtime weicht > 2 s ab). 0-Byte-Dateien werden als leere Datei
+angelegt (iCloud liefert sonst 400). Resumebar via `.part` + atomarem Rename.
 
-## Bekannte Fallstricke (im Code berücksichtigen)
+**Photos** (`sync/photos.py`): `api.photos.all` (intern paginiert) iterieren.
+Zielpfad `Photos/<YYYY>/<MM>/<kurz-id>_<name>`. **Namens-Kollisionen** über eine kurze,
+stabile SHA1-Asset-ID als Präfix gelöst. **Live Photos**: Original (`original`) **und**
+Video (`original_video`) werden beide gesichert. Originale, nicht optimierte Versionen.
+Streaming über die authentifizierte Session.
+
+**Mail** (`sync/mail.py`): alle Ordner via IMAP `LIST` (modified-UTF-7-Namen dekodiert),
+je Ordner `Mail/<Ordner>/<uid>.eml` (rohes RFC822 inkl. Anhänge). **Ungelesen-schonend:**
+`select(readonly=True)` + `BODY.PEEK[]` (setzt kein `\Seen`, ändert keine Flags).
+**UIDVALIDITY** wird je Ordner in `.uidvalidity` gemerkt; bei Wechsel wird der Ordner
+lokal zurückgesetzt und neu geladen. Login probiert Apple-ID und Lokalteil.
+
+**Retry/Backoff** (`util.with_retries`): exponentielles Backoff (Default 4 Versuche, ab
+2 s) nur bei retrybaren Fehlern (HTTP 429/5xx, „throttl/rate limit/timeout"). Apple nicht
+hämmern.
+
+## Re-Auth-Handling (`auth/session.py`)
+
+`session.py` ist die **einzige** Stelle, die `pyicloud` importiert (kapselt API-Drift,
+Fallstrick #7). Nach außen nur stabile Typen (`LoginResult`, `UserStatus`).
+
+- Trusted-Session-Cookies pro User in `~/Library/Application Support/icloud-sync/sessions/<id>/`
+  (überlebt App-Updates).
+- Abgelaufene Session / `requires_2fa`/`2sa` → `UserStatus.NEEDS_REAUTH`, **rotes Badge**
+  am Menüleisten-Icon, macOS-Notification. `check_session` prüft das beim App-Start, ohne
+  einen vollen Sync zu starten.
+- Re-Auth-Flow im UI: 2FA-Code eingeben → `validate_2fa_code` → `trust_session`.
+- Betroffener User wird vom Auto-Sync ausgesetzt; andere User laufen weiter. Mail des
+  betroffenen Users läuft trotzdem (eigene Credentials).
+
+## Bekannte Fallstricke (im Code berücksichtigt)
 
 1. **Session-Ablauf / 2FA-Re-Auth** – siehe oben. Häufigster Ausfallgrund.
-2. **Apple-Throttling** – exponentielles Backoff, nicht hämmern, Retry-Limits.
-3. **Gatekeeper/Quarantäne** – unsigniertes `.app` wird beim ersten Start
-   blockiert. Für Eigengebrauch: Ad-hoc-Signierung + Rechtsklick→Öffnen, oder
-   `xattr -dr com.apple.quarantine`. In README dokumentieren, damit am Mac keine
-   Überraschung.
-4. **Keychain-Prompts** – unsigniertes Bundle kann bei jedem Start erneut nach
-   Keychain-Freigabe fragen. Ad-hoc-Codesigning mit stabiler Identität mildert das.
-5. **UNAS-Mount fehlt** – vor Sync prüfen, ob Ziel-Volume gemountet ist; sonst
-   sauber abbrechen + Notification, nicht crashen.
-6. **Freier Speicher** – vor großem Lauf prüfen.
-7. **pyicloud-API-Drift** – Auth-Pfad kapseln (`auth/session.py`), damit ein
-   API-Bruch nur an einer Stelle gefixt werden muss.
+2. **Apple-Throttling** – exponentielles Backoff (`util.with_retries`), Retry-Limit.
+3. **Gatekeeper/Quarantäne** – unsigniertes/ad-hoc-signiertes `.app` → README:
+   Rechtsklick→Öffnen bzw. `xattr -dr com.apple.quarantine`.
+4. **Keychain-Prompts** – durch Ad-hoc-Codesigning mit stabiler Identität gemildert.
+5. **UNAS-Mount fehlt** – `engine.is_mount_available` prüft vor dem Sync; sonst sauberer
+   Abbruch + Notification, kein Crash.
+6. **Freier Speicher** – `engine._check_free_space` warnt (< 2 GiB), bricht aber nicht ab.
+7. **pyicloud-API-Drift** – allein in `auth/session.py` gekapselt.
+8. **Spiegel-Löschen** – `prune_extra` nur bei vollständigem, fehlerfreiem Listing
+   (Guards in jedem Sync-Modul). Niemals löschen bei Teil-/Fehlerlauf.
 
 ## TCC / Berechtigungen
 
-Durch den Web-API-Weg **kein** Photos-Library- oder Full-Disk-Access nötig – das
-ist der bewusste Vorteil dieser Architektur. Nur Schreibzugriff aufs (gemountete)
-Ziel-Volume und Keychain.
+Durch den Web-API-/IMAP-Weg **kein** Photos-Library- oder Full-Disk-Access nötig. Nur
+Schreibzugriff aufs (gemountete) Ziel-Volume und Keychain.
 
-## Verpackung zum `.app`
+## Verpackung zum `.app` (`build/setup.py`)
 
-`build/setup.py` mit py2app:
+py2app, Entrypoint `launcher.py`:
 
-- `LSUIElement = True` (Menüleisten-only, kein Dock)
-- Bundle-ID, App-Name, Icon
-- Auto-Start beim Login als In-App-Toggle (SMAppService/LoginItem)
-- Build-Befehl + Ad-hoc-Signierung in README dokumentieren
+- `LSUIElement = True`; Bundle-ID `de.nicx.icloud-sync`, Name „iCloud Sync", Version 0.1.0
+- `iconfile` = `build/icon.icns` (falls vorhanden)
+- Sonderfall eingebaut: `charset_normalizer`-mypyc-`.so` wird explizit ins Bundle kopiert
+- Login-Autostart als In-App-Toggle (LaunchAgent, nur im gebauten Bundle wirksam)
+- Build-Befehl + Ad-hoc-Signierung in README dokumentiert
 
-## Definition of Done (Phase 1)
+## Tests
 
-- [ ] `.app` baut, doppelklickbar, erscheint in Menüleiste
-- [ ] User anlegen/konfigurieren/löschen, Credentials im Keychain
-- [ ] pyicloud-Login inkl. 2FA-Erstauth pro User
-- [ ] Re-Auth-Erkennung + Notification + Re-Auth-Flow im UI
-- [ ] Drive inkrementell auf UNAS Pro
-- [ ] Photos inkrementell auf UNAS Pro (resumebar)
-- [ ] Täglicher Scheduler mit Missed-Run-Catch-up
-- [ ] „Sync jetzt"-Button, Status pro User sichtbar
-- [ ] README: Build, Ad-hoc-Signing, Gatekeeper, Mount-Voraussetzung
+`tests/test_sync.py` — eigenständiges, mock-basiertes Skript (kein Netz, kein Account;
+`HOME` zeigt auf ein Temp-Verzeichnis). Deckt ab: Drive/Photos/Mail inkrementell + Skip
+im 2. Lauf, Spiegel-Löschen, alle Lösch-Guards, Photos-Kollision + Live, Mail
+readonly/PEEK/UIDVALIDITY/Move/Auth-Fehler, Engine-Resilienz.
 
-## Empfohlene Baureihenfolge
+```
+.venv/bin/python tests/test_sync.py
+```
 
-1. Projektgerüst + `requirements.txt`
-2. User-Config-Modell + Keychain
-3. `auth/session.py` (Login, Cookie-Persistenz, Re-Auth) – früh, weil riskant
-4. Menüleisten-Skelett (`app.py`), Status-Anzeige, User-Verwaltung
-5. `sync/state.py` (sqlite-Manifest)
-6. `drive.py`, dann `photos.py`
-7. Scheduler + Catch-up
-8. py2app-Verpackung + README
+## Status (Definition of Done – Phase 1, erfüllt)
+
+- [x] `.app` baut, doppelklickbar, erscheint in Menüleiste (Template-Icon)
+- [x] User anlegen/konfigurieren/löschen, Credentials im Keychain (Web + Mail)
+- [x] pyicloud-Login inkl. 2FA-Erstauth pro User
+- [x] Re-Auth-Erkennung + Notification + Re-Auth-Flow im UI
+- [x] Drive/Photos/Mail als Datei-Spiegel auf UNAS Pro (resumebar, geguarded)
+- [x] Periodischer Scheduler (konfigurierbar, Default 4 h) mit Missed-Run-Catch-up
+- [x] „Sync jetzt"-Button, Live-Status/Fortschritt pro User
+- [x] README: Build, Ad-hoc-Signing, Gatekeeper, Mount-Voraussetzung
