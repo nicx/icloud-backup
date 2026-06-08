@@ -1,0 +1,3 @@
+# Nur für den Bau des .app-Bundles (späterer Durchgang, nicht für Entwicklung/Betrieb nötig).
+-r requirements.txt
+py2app>=0.28

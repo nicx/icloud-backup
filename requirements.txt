@@ -1,0 +1,5 @@
+# Runtime-Abhängigkeiten der App (Python 3.10+; entwickelt/getestet mit Homebrew 3.13)
+rumps>=0.4.0          # Menüleisten-UI (Status-Bar, Popover, Notifications)
+pyicloud>=2.6.4       # gepflegter Fork (timlaing/pyicloud): iCloud Drive + Photos + 2FA/Trust
+keyring>=24.0         # Credentials im macOS-Keychain
+pync>=2.0.3           # Fallback für macOS-Notifications (terminal-notifier)

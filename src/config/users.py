@@ -1,0 +1,149 @@
+"""User-Modell und Persistenz.
+
+Ein *User* entspricht einem Apple-Account, der gesichert werden soll. Die Liste wird
+als ``users.json`` in App Support gehalten. **Passwörter werden hier nie gespeichert** —
+sie liegen ausschließlich im macOS-Keychain (siehe ``auth.keychain``).
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass, field
+from enum import Enum
+from typing import Optional
+
+from .paths import users_file
+
+
+class UserStatus(str, Enum):
+    """Status eines Users im Backup-Lebenszyklus.
+
+    ``str``-Enum, damit die Werte direkt JSON-serialisierbar sind.
+    """
+
+    IDLE = "idle"            # konfiguriert, aber noch kein Lauf / wartet
+    RUNNING = "running"      # Sync läuft gerade
+    OK = "ok"                # letzter Lauf erfolgreich, Session gültig
+    NEEDS_REAUTH = "needs_reauth"  # 2FA/Session abgelaufen -> User-Eingriff nötig
+    ERROR = "error"          # letzter Lauf fehlgeschlagen
+
+
+@dataclass
+class User:
+    """Konfiguration und Laufzeit-Status eines Apple-Accounts.
+
+    :param apple_id: Apple-ID (E-Mail). Dient als eindeutiger Schlüssel.
+    :param sync_drive: iCloud Drive sichern?
+    :param sync_photos: iCloud Photos sichern?
+    :param dest_base_path: Ziel-Basispfad auf dem (gemounteten) Volume.
+    :param status: aktueller :class:`UserStatus`.
+    :param last_run: ISO-8601-Zeitstempel des letzten erfolgreichen Laufbeginns (oder None).
+    """
+
+    apple_id: str
+    sync_drive: bool = True
+    sync_photos: bool = True
+    dest_base_path: str = ""
+    status: UserStatus = UserStatus.IDLE
+    last_run: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        d["status"] = self.status.value
+        return d
+
+    @classmethod
+    def from_dict(cls, raw: dict) -> "User":
+        status = raw.get("status", UserStatus.IDLE.value)
+        try:
+            status_enum = UserStatus(status)
+        except ValueError:
+            status_enum = UserStatus.IDLE
+        return cls(
+            apple_id=raw["apple_id"],
+            sync_drive=bool(raw.get("sync_drive", True)),
+            sync_photos=bool(raw.get("sync_photos", True)),
+            dest_base_path=raw.get("dest_base_path", ""),
+            status=status_enum,
+            last_run=raw.get("last_run"),
+        )
+
+
+@dataclass
+class UsersStore:
+    """In-Memory-Liste der User mit JSON-Persistenz.
+
+    Vor dem ersten Zugriff :meth:`load` aufrufen (oder ``UsersStore.loaded()`` nutzen).
+    Schreibende Operationen persistieren sofort.
+    """
+
+    users: list[User] = field(default_factory=list)
+
+    @classmethod
+    def loaded(cls) -> "UsersStore":
+        """Erzeugt einen Store und lädt vorhandene ``users.json``."""
+        store = cls()
+        store.load()
+        return store
+
+    def load(self) -> None:
+        path = users_file()
+        if not path.exists():
+            self.users = []
+            return
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            self.users = []
+            return
+        self.users = [User.from_dict(u) for u in raw.get("users", [])]
+
+    def save(self) -> None:
+        path = users_file()
+        tmp = path.with_suffix(".json.tmp")
+        payload = {"users": [u.to_dict() for u in self.users]}
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        tmp.replace(path)
+
+    # --- CRUD ---------------------------------------------------------------
+
+    def list(self) -> list[User]:
+        return list(self.users)
+
+    def get(self, apple_id: str) -> Optional[User]:
+        for u in self.users:
+            if u.apple_id == apple_id:
+                return u
+        return None
+
+    def add(self, user: User) -> None:
+        """Fügt einen User hinzu. Doppelte Apple-ID -> ValueError."""
+        if self.get(user.apple_id) is not None:
+            raise ValueError(f"User existiert bereits: {user.apple_id}")
+        self.users.append(user)
+        self.save()
+
+    def update(self, user: User) -> None:
+        """Ersetzt einen vorhandenen User (Match per ``apple_id``)."""
+        for i, u in enumerate(self.users):
+            if u.apple_id == user.apple_id:
+                self.users[i] = user
+                self.save()
+                return
+        raise KeyError(f"Unbekannter User: {user.apple_id}")
+
+    def set_status(self, apple_id: str, status: UserStatus, last_run: Optional[str] = None) -> None:
+        """Bequemer Helfer: Status (und optional last_run) eines Users aktualisieren."""
+        u = self.get(apple_id)
+        if u is None:
+            raise KeyError(f"Unbekannter User: {apple_id}")
+        u.status = status
+        if last_run is not None:
+            u.last_run = last_run
+        self.save()
+
+    def remove(self, apple_id: str) -> None:
+        before = len(self.users)
+        self.users = [u for u in self.users if u.apple_id != apple_id]
+        if len(self.users) != before:
+            self.save()
