@@ -51,13 +51,13 @@ SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 UI_TICK_SECONDS = 1.0
 
 
-class BackupApp(rumps.App):
+class SyncApp(rumps.App):
     """Menüleisten-Resident für das iCloud-Multi-User-Backup."""
 
     def __init__(self) -> None:
         # quit_button=None: wir fügen "Beenden" selbst hinzu, da _rebuild_menu das Menü
         # komplett neu aufbaut und rumps' Auto-Quit-Button dabei sonst verloren ginge.
-        super().__init__("iCloud Backup", title=ICON_OK, quit_button=None)
+        super().__init__("iCloud Sync", title=ICON_OK, quit_button=None)
         self.settings: Settings = load_settings()
         self.store: UsersStore = UsersStore.loaded()
         self._sync_lock = threading.Lock()  # verhindert überlappende Sync-Läufe
@@ -257,7 +257,7 @@ class BackupApp(rumps.App):
         user.status = status
         self.store.add(user)
         self._rebuild_menu()
-        notify.notify("iCloud Backup", f"User {apple_id} hinzugefügt ({user.status.value}).")
+        notify.notify("iCloud Sync", f"User {apple_id} hinzugefügt ({user.status.value}).")
 
     def _prompt_mail_password(self, apple_id: str) -> bool:
         """Fragt das app-spezifische Mail-Passwort ab und legt es im Keychain ab. True bei Erfolg."""
@@ -316,7 +316,7 @@ class BackupApp(rumps.App):
             user.sync_mail = True
             self.store.update(user)
         self._rebuild_menu()
-        notify.notify("iCloud Backup", f"Mail-App-Passwort für {apple_id} gespeichert.")
+        notify.notify("iCloud Sync", f"Mail-App-Passwort für {apple_id} gespeichert.")
 
     def _change_dest(self, apple_id: str, _sender=None) -> None:
         user = self.store.get(apple_id)
@@ -329,7 +329,7 @@ class BackupApp(rumps.App):
         user.dest_base_path = new_dest
         self.store.update(user)
         self._rebuild_menu()
-        notify.notify("iCloud Backup", f"Zielordner für {apple_id} geändert.")
+        notify.notify("iCloud Sync", f"Zielordner für {apple_id} geändert.")
 
     def _remove_user(self, apple_id: str, _sender=None) -> None:
         if not self._ask_yes_no(f"{apple_id} entfernen? (Backup-Dateien bleiben erhalten)", "Entfernen"):
@@ -353,7 +353,7 @@ class BackupApp(rumps.App):
             return
         self.settings.sync_interval_hours = hours
         save_settings(self.settings)
-        notify.notify("iCloud Backup", f"Sync-Intervall: alle {hours} h.")
+        notify.notify("iCloud Sync", f"Sync-Intervall: alle {hours} h.")
 
     def _quit(self, _sender) -> None:
         rumps.quit_application()
@@ -485,7 +485,7 @@ class BackupApp(rumps.App):
             status = session.check_session(user.apple_id, password)
             self.store.set_status(user.apple_id, status)
             if status == UserStatus.NEEDS_REAUTH:
-                notify.notify("iCloud Backup – Re-Auth nötig",
+                notify.notify("iCloud Sync – Re-Auth nötig",
                               f"{user.apple_id}: bitte erneut anmelden.")
 
     # -- Util ----------------------------------------------------------------
@@ -497,7 +497,7 @@ class BackupApp(rumps.App):
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    BackupApp().run()
+    SyncApp().run()
 
 
 if __name__ == "__main__":

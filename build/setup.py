@@ -1,6 +1,6 @@
 """py2app-Build-Konfiguration für das Menüleisten-Bundle.
 
-Baut ``iCloud Backup.app`` als Menüleisten-Resident (``LSUIElement``).
+Baut ``iCloud Sync.app`` als Menüleisten-Resident (``LSUIElement``).
 
 Vom Repo-Root ausführen (py2app-Artefakte landen in ``dist/`` bzw. ``build/_py2app/``)::
 
@@ -48,9 +48,9 @@ OPTIONS = {
     "argv_emulation": False,
     "plist": {
         "LSUIElement": True,  # reine Menüleisten-App: kein Dock-Icon, kein Fenster
-        "CFBundleName": "iCloud Backup",
-        "CFBundleDisplayName": "iCloud Backup",
-        "CFBundleIdentifier": "de.nicx.icloud-backup",
+        "CFBundleName": "iCloud Sync",
+        "CFBundleDisplayName": "iCloud Sync",
+        "CFBundleIdentifier": "de.nicx.icloud-sync",
         "CFBundleShortVersionString": "0.1.0",
         "CFBundleVersion": "0.1.0",
         "NSHumanReadableCopyright": "GPLv3 – nicx",

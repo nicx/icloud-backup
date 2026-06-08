@@ -69,7 +69,7 @@ def run_user(user: User, store: Optional[UsersStore] = None, progress_cb=None) -
     # 1) Ziel-Volume gemountet?
     if not is_mount_available(user.dest_base_path):
         LOGGER.warning("Ziel-Volume nicht verfügbar für %s: %s", user.apple_id, user.dest_base_path)
-        notify.notify("iCloud Backup – Ziel fehlt",
+        notify.notify("iCloud Sync – Ziel fehlt",
                     f"{user.apple_id}: {user.dest_base_path} ist nicht gemountet.")
         return _set(UserStatus.ERROR)
     _check_free_space(user.dest_base_path)
@@ -87,7 +87,7 @@ def run_user(user: User, store: Optional[UsersStore] = None, progress_cb=None) -
             result = session.login(user.apple_id, password)
             if result.needs_2fa:
                 web_reauth = True
-                notify.notify("iCloud Backup – Re-Auth nötig",
+                notify.notify("iCloud Sync – Re-Auth nötig",
                               f"{user.apple_id}: bitte erneut anmelden (Drive/Photos).")
             elif result.error or result.api is None:
                 LOGGER.error("Login-Fehler für %s: %s", user.apple_id, result.error)
@@ -110,7 +110,7 @@ def run_user(user: User, store: Optional[UsersStore] = None, progress_cb=None) -
         app_pw = keychain.get_mail_password(user.apple_id)
         if not app_pw:
             LOGGER.error("Kein Mail-App-Passwort im Keychain für %s", user.apple_id)
-            notify.notify("iCloud Backup – Mail-Passwort fehlt",
+            notify.notify("iCloud Sync – Mail-Passwort fehlt",
                           f"{user.apple_id}: app-spezifisches Passwort setzen.")
             had_error = True
         else:
@@ -119,7 +119,7 @@ def run_user(user: User, store: Optional[UsersStore] = None, progress_cb=None) -
                 had_error = had_error or ms.errors > 0
             except MailAuthError as exc:
                 LOGGER.error("Mail-Login fehlgeschlagen für %s: %s", user.apple_id, exc)
-                notify.notify("iCloud Backup – Mail-Login",
+                notify.notify("iCloud Sync – Mail-Login",
                               f"{user.apple_id}: App-Passwort prüfen/neu erzeugen.")
                 had_error = True
             except Exception:  # noqa: BLE001

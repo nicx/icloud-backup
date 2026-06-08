@@ -1,7 +1,7 @@
 """App-Support-Pfad-Helfer.
 
 Alle persistenten Daten der App liegen unter
-``~/Library/Application Support/icloud-backup/`` — dieser Ort überlebt App-Updates
+``~/Library/Application Support/icloud-sync/`` — dieser Ort überlebt App-Updates
 (im Gegensatz zum Bundle-Inneren) und ist von ``auth`` und ``sync`` gemeinsam genutzt.
 
 Passwörter liegen NICHT hier, sondern ausschließlich im macOS-Keychain (siehe
@@ -10,18 +10,32 @@ Passwörter liegen NICHT hier, sondern ausschließlich im macOS-Keychain (siehe
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
-APP_DIR_NAME = "icloud-backup"
+LOGGER = logging.getLogger(__name__)
+
+APP_DIR_NAME = "icloud-sync"
+_LEGACY_DIR_NAME = "icloud-backup"  # vor der Umbenennung – wird einmalig migriert
 
 
 def app_support_dir() -> Path:
     """Basisverzeichnis der App in ``~/Library/Application Support``.
 
+    Migriert ein evtl. vorhandenes Alt-Verzeichnis (``icloud-backup``) einmalig auf den
+    neuen Namen, damit bestehende Config/Sessions nach der Umbenennung erhalten bleiben.
     Wird bei Bedarf angelegt.
     """
-    base = Path.home() / "Library" / "Application Support" / APP_DIR_NAME
+    support = Path.home() / "Library" / "Application Support"
+    base = support / APP_DIR_NAME
+    legacy = support / _LEGACY_DIR_NAME
+    if not base.exists() and legacy.is_dir():
+        try:
+            legacy.rename(base)
+            LOGGER.info("App-Support migriert: %s -> %s", legacy, base)
+        except OSError as exc:
+            LOGGER.warning("Migration des App-Support-Verzeichnisses fehlgeschlagen: %s", exc)
     base.mkdir(parents=True, exist_ok=True)
     return base
 

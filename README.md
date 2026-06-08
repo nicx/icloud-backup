@@ -1,4 +1,4 @@
-# iCloud Multi-User Backup
+# iCloud Sync
 
 Native macOS-**Menüleisten-App**, die regelmäßig (konfigurierbar, Default alle 4 h) die iCloud-Daten
 **mehrerer Apple-Accounts** auf ein Netzlaufwerk (z. B. UNAS Pro) spiegelt:
@@ -73,11 +73,11 @@ laufen davon unbeeinflusst weiter.
 
 | Zweck | Ort |
 |-------|-----|
-| Globale Settings | `~/Library/Application Support/icloud-backup/settings.json` |
-| User-Liste (ohne Passwort) | `~/Library/Application Support/icloud-backup/users.json` |
-| Trusted-Session-Cookies | `~/Library/Application Support/icloud-backup/sessions/<apple-id>/` |
-| Apple-ID-Passwort (Drive/Photos) | macOS-Keychain (Service `icloud-backup`) |
-| App-spezifisches Passwort (Mail) | macOS-Keychain (Service `icloud-backup-mail`) |
+| Globale Settings | `~/Library/Application Support/icloud-sync/settings.json` |
+| User-Liste (ohne Passwort) | `~/Library/Application Support/icloud-sync/users.json` |
+| Trusted-Session-Cookies | `~/Library/Application Support/icloud-sync/sessions/<apple-id>/` |
+| Apple-ID-Passwort (Drive/Photos) | macOS-Keychain (Service `icloud-sync`) |
+| App-spezifisches Passwort (Mail) | macOS-Keychain (Service `icloud-sync-mail`) |
 
 ### Backup-Ablage auf dem Ziel-Volume
 
@@ -105,7 +105,7 @@ Ein Schritt (Build + Ad-hoc-Signierung):
 
 ```bash
 bash build/build.sh
-# Ergebnis: dist/iCloud Backup.app
+# Ergebnis: dist/iCloud Sync.app
 ```
 
 Oder manuell:
@@ -113,11 +113,11 @@ Oder manuell:
 ```bash
 .venv/bin/pip install -r requirements-build.txt
 .venv/bin/python build/setup.py py2app --dist-dir dist --bdist-base build/_py2app
-codesign --force --deep --sign - "dist/iCloud Backup.app"
+codesign --force --deep --sign - "dist/iCloud Sync.app"
 ```
 
 Das Bundle ist eine reine **Menüleisten-App** (`LSUIElement` → kein Dock-Icon), Bundle-ID
-`de.nicx.icloud-backup`. Es ist **ad-hoc signiert** (kein Apple-Developer-Zertifikat).
+`de.nicx.icloud-sync`. Es ist **ad-hoc signiert** (kein Apple-Developer-Zertifikat).
 
 ### Gatekeeper / Quarantäne
 
@@ -128,7 +128,7 @@ Eigengebrauch:
   startet sie künftig normal per Doppelklick.
 - Falls die App aus dem Internet/von einem anderen Mac kam und das Quarantäne-Flag trägt:
   ```bash
-  xattr -dr com.apple.quarantine "dist/iCloud Backup.app"
+  xattr -dr com.apple.quarantine "dist/iCloud Sync.app"
   ```
 
 > Die Ad-hoc-Signierung mit stabiler Bundle-ID mildert auch wiederholte Keychain-Freigabe-Prompts.
@@ -136,7 +136,7 @@ Eigengebrauch:
 ### Autostart beim Login
 
 Im Menü **„Beim Login starten"** umschaltbar. Der Toggle legt einen LaunchAgent unter
-`~/Library/LaunchAgents/de.nicx.icloud-backup.plist` an bzw. entfernt ihn. Er funktioniert nur
+`~/Library/LaunchAgents/de.nicx.icloud-sync.plist` an bzw. entfernt ihn. Er funktioniert nur
 für das gebaute `.app`-Bundle (nicht im `python -m src.app`-Entwicklungsmodus).
 
 ### Voraussetzung Ziel-Volume

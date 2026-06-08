@@ -16,7 +16,7 @@ from typing import Sequence
 
 LOGGER = logging.getLogger(__name__)
 
-LABEL = "de.nicx.icloud-backup"
+LABEL = "de.nicx.icloud-sync"
 
 
 def plist_path() -> Path:

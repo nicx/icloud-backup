@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Baut "iCloud Backup.app" mit py2app und signiert es ad-hoc.
+# Baut "iCloud Sync.app" mit py2app und signiert es ad-hoc.
 # Vom Repo-Root ausführen:  bash build/build.sh
 #
 set -euo pipefail
@@ -9,7 +9,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 PY="${PYTHON:-.venv/bin/python}"
-APP="dist/iCloud Backup.app"
+APP="dist/iCloud Sync.app"
 
 if [[ ! -x "$PY" ]]; then
   echo "Kein venv-Python unter $PY. Erst: /opt/homebrew/bin/python3.13 -m venv .venv" >&2
