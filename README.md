@@ -11,9 +11,9 @@ Zugriff erfolgt über die inoffizielle iCloud-Web-API ([pyicloud](https://github
 damit mehrere Accounts aus einem Prozess heraus gesichert werden können — ohne PhotoKit,
 Full-Disk-Access oder pro Account einen eigenen macOS-User.
 
-> **Status:** Phase 1 — Skelett. Config-/Keychain-Schicht, Auth-/Re-Auth-Layer und die
-> lauffähige Menüleisten-App mit User-Verwaltung sind vorhanden. Die eigentliche Sync-Engine
-> (Drive/Photos inkrementell), der py2app-Build und Autostart folgen.
+> **Status:** Phase 2. Config-/Keychain-Schicht, Auth-/Re-Auth-Layer, Menüleisten-App mit
+> User-Verwaltung **und die inkrementelle, resumebare Sync-Engine (Drive + Photos)** sind
+> implementiert und mit Mock-Tests abgedeckt. Offen bleiben py2app-Build und Login-Autostart.
 
 ## Voraussetzungen
 
@@ -54,9 +54,27 @@ laufen davon unbeeinflusst weiter.
 | Sync-Manifest (sqlite) | `~/Library/Application Support/icloud-backup/state/<apple-id>.sqlite` |
 | Passwörter | macOS-Keychain (Service `icloud-backup`) |
 
+### Backup-Ablage auf dem Ziel-Volume
+
+```
+<dest_base_path>/
+  Drive/<originale Ordnerstruktur>/...          # 1:1-Spiegel des iCloud-Drive-Baums
+  Photos/<JJJJ>/<MM>/<kurz-id>_<dateiname>      # nach Erstelldatum; Asset-ID-Präfix gegen Kollisionen
+```
+
+Der Sync ist **inkrementell** (nur Neues/Geändertes, Abgleich über das sqlite-Manifest),
+**resumebar** (Download nach `.part` + atomarer Rename; Manifest erst nach Erfolg) und
+**additiv** (in iCloud Gelöschtes bleibt im Backup). Live Photos werden als Foto **und** Video
+gesichert. Bei Throttling greift exponentielles Backoff.
+
+## Tests
+
+```bash
+.venv/bin/python tests/test_sync.py    # Mock-basiert, kein Netzwerk/Account nötig
+```
+
 ## Noch offen (spätere Durchgänge)
 
-- Inkrementeller Drive-/Photos-Download (resumebar, sqlite-Manifest).
 - py2app-Build zum `.app`-Bundle (`LSUIElement`, Ad-hoc-Signing, Gatekeeper-/Mount-Hinweise).
 - Autostart beim Login (SMAppService).
 
