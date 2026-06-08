@@ -32,7 +32,9 @@ Full-Disk-Access oder pro Account einen eigenen macOS-User.
 ```
 
 Beim ersten Start erscheint das Menüleisten-Icon. Über **„User hinzufügen…"** wird ein Apple-Account
-angelegt: Apple-ID, Passwort (landet ausschließlich im macOS-Keychain), Zielpfad und Drive/Photos-Auswahl.
+angelegt: Apple-ID, Passwort (landet ausschließlich im macOS-Keychain), Ziel-Ordner (per **Finder-Dialog**
+auswählbar) und Drive/Photos-Auswahl. Der Zielordner lässt sich später jederzeit über den Menüpunkt
+**„Zielordner ändern…"** im jeweiligen User-Untermenü anpassen.
 Apple verlangt eine **2FA-Bestätigung** — der Code wird im Dialog eingegeben. Die Trusted-Session wird
 danach persistiert (`~/Library/Application Support/icloud-backup/sessions/<apple-id>/`), sodass folgende
 Starts in der Regel ohne erneute 2FA auskommen.

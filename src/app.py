@@ -99,6 +99,10 @@ class BackupApp(rumps.App):
         parent = rumps.MenuItem(f"{symbol} {user.apple_id}{last}")
         parent.add(rumps.MenuItem("Sync jetzt", callback=partial(self._sync_one, user.apple_id)))
         parent.add(rumps.MenuItem("Re-Auth…", callback=partial(self._reauth, user.apple_id)))
+        parent.add(rumps.MenuItem("Zielordner ändern…", callback=partial(self._change_dest, user.apple_id)))
+        dest_label = rumps.MenuItem(f"Ziel: {user.dest_base_path or '—'}")
+        dest_label.set_callback(None)  # nur Info, nicht klickbar
+        parent.add(dest_label)
         parent.add(rumps.separator)
         parent.add(rumps.MenuItem("Entfernen…", callback=partial(self._remove_user, user.apple_id)))
         self._user_items[user.apple_id] = parent
@@ -142,6 +146,40 @@ class BackupApp(rumps.App):
         win = rumps.Window(message=message, title=title, ok="Ja", cancel="Nein", dimensions=(1, 1))
         return win.run().clicked == 1
 
+    def _ask_directory(self, message: str, default: Optional[str] = None) -> Optional[str]:
+        """Komfortable Ordnerauswahl: nativer Finder-Dialog, mit Fallback auf Texteingabe.
+
+        Gibt den gewählten Pfad zurück oder None bei Abbruch.
+        """
+        try:
+            return self._native_directory_dialog(message, default)
+        except Exception:  # noqa: BLE001 - im Zweifel nie blockieren
+            LOGGER.exception("NSOpenPanel nicht verfügbar, Fallback auf Texteingabe")
+            text = self._ask_text(message, "Ordner wählen", default=default or "")
+            return text or None
+
+    @staticmethod
+    def _native_directory_dialog(message: str, default_path: Optional[str]) -> Optional[str]:
+        """Nativer Finder-Ordnerdialog (NSOpenPanel). Muss auf dem Main-Thread laufen."""
+        from AppKit import NSApp, NSOpenPanel
+        from Foundation import NSURL
+
+        panel = NSOpenPanel.openPanel()
+        panel.setCanChooseFiles_(False)
+        panel.setCanChooseDirectories_(True)
+        panel.setAllowsMultipleSelection_(False)
+        panel.setCanCreateDirectories_(True)
+        panel.setPrompt_("Auswählen")
+        panel.setMessage_(message)
+        if default_path:
+            panel.setDirectoryURL_(NSURL.fileURLWithPath_(default_path))
+        # Menüleisten-App (LSUIElement) in den Vordergrund holen, sonst öffnet der Dialog dahinter.
+        NSApp.activateIgnoringOtherApps_(True)
+        if panel.runModal() != 1:  # 1 == NSModalResponseOK
+            return None
+        urls = panel.URLs()
+        return urls[0].path() if urls else None
+
     # -- User hinzufügen -----------------------------------------------------
 
     def _add_user(self, _sender) -> None:
@@ -155,9 +193,9 @@ class BackupApp(rumps.App):
                                    "User hinzufügen", secure=True)
         if not password:
             return
-        dest = self._ask_text("Ziel-Basispfad (z. B. /Volumes/backup/icloud/<user>/):",
-                              "User hinzufügen")
-        if dest is None:
+        dest = self._ask_directory(f"Ziel-Ordner für das Backup von {apple_id} wählen "
+                                   "(z. B. auf dem UNAS-Volume):")
+        if not dest:
             return
         sync_drive = self._ask_yes_no("iCloud Drive sichern?", "User hinzufügen")
         sync_photos = self._ask_yes_no("iCloud Photos sichern?", "User hinzufügen")
@@ -223,6 +261,19 @@ class BackupApp(rumps.App):
         else:
             self.store.set_status(apple_id, UserStatus.OK)
         self._rebuild_menu()
+
+    def _change_dest(self, apple_id: str, _sender=None) -> None:
+        user = self.store.get(apple_id)
+        if user is None:
+            return
+        new_dest = self._ask_directory(f"Neuen Ziel-Ordner für {apple_id} wählen:",
+                                       default=user.dest_base_path or None)
+        if not new_dest:
+            return
+        user.dest_base_path = new_dest
+        self.store.update(user)
+        self._rebuild_menu()
+        notify.notify("iCloud Backup", f"Zielordner für {apple_id} geändert.")
 
     def _remove_user(self, apple_id: str, _sender=None) -> None:
         if not self._ask_yes_no(f"{apple_id} entfernen? (Backup-Dateien bleiben erhalten)", "Entfernen"):
