@@ -19,7 +19,7 @@ from typing import Optional
 
 import rumps
 
-from . import autostart, notify
+from . import autostart, menubar_icon, notify
 from .auth import keychain, session
 from .config.settings import Settings, load_settings, save_settings
 from .config.users import User, UsersStore, UserStatus
@@ -63,6 +63,8 @@ class BackupApp(rumps.App):
         self._user_items: dict = {}         # apple_id -> rumps.MenuItem (für Live-Updates)
         self._spin = 0
         self._was_running = False
+        self._has_icon = False
+        self._setup_menubar_icon()
         self._rebuild_menu()
 
         self.timer = rumps.Timer(self._tick, TICK_SECONDS)
@@ -108,11 +110,26 @@ class BackupApp(rumps.App):
         self._user_items[user.apple_id] = parent
         return parent
 
+    def _setup_menubar_icon(self) -> None:
+        """Setzt ein echtes Template-Image als Menüleisten-Icon (statt Textglyph)."""
+        path = menubar_icon.ensure_menubar_icon()
+        self._has_icon = bool(path)
+        if path:
+            self.template = True  # System tönt hell/dunkel und skaliert auf Menüleistenhöhe
+            self.icon = path
+            self.title = ""
+        else:
+            self.title = ICON_OK
+
     def _update_icon(self) -> None:
         attention = any(
             u.status in (UserStatus.NEEDS_REAUTH, UserStatus.ERROR) for u in self.store.list()
         )
-        self.title = ICON_ATTENTION if attention else ICON_OK
+        if self._has_icon:
+            # Icon bleibt; Aufmerksamkeit als kleines Badge daneben.
+            self.title = " 🔴" if attention else ""
+        else:
+            self.title = ICON_ATTENTION if attention else ICON_OK
 
     @staticmethod
     def _fmt_last_run(iso: Optional[str]) -> str:
@@ -354,7 +371,8 @@ class BackupApp(rumps.App):
         running = [u for u in self.store.list() if u.status == UserStatus.RUNNING]
         if running:
             self._spin = (self._spin + 1) % len(SPINNER)
-            self.title = f"{ICON_OK} {SPINNER[self._spin]}"
+            frame = SPINNER[self._spin]
+            self.title = f" {frame}" if self._has_icon else f"{ICON_OK} {frame}"
             for u in running:
                 item = self._user_items.get(u.apple_id)
                 if item is not None:
