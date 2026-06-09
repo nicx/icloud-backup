@@ -60,10 +60,10 @@ abgelehnt). Einmal pro Account:
 
 Mail wird nach `Mail/<Ordner>/<uid>.eml` gespiegelt — **echte Ordnerstruktur** wie in iCloud Mail.
 Nachrichten werden mit `BODY.PEEK[]` geladen und bleiben dadurch **ungelesen**. Das **Empfangsdatum**
-(IMAP `INTERNALDATE`) wird als Datei-Änderungsdatum gesetzt, sodass die Finder-Datumsspalte und das
-Sortieren nach Datum die Empfangszeit zeigen (das vollständige Datum steckt ohnehin im `Date:`-Header
-jeder `.eml`). Der Mail-Sync läuft **unabhängig** von der Drive/Photos-Web-Session (auch wenn die
-gerade ein Re-Auth braucht).
+(IMAP `INTERNALDATE`) wird als **Änderungs- und Erstellungsdatum** der Datei gesetzt (auf macOS via
+`setattrlist`), sodass die Finder-Spalten und das Sortieren nach Datum die Empfangszeit zeigen (das
+vollständige Datum steckt ohnehin im `Date:`-Header jeder `.eml`). Der Mail-Sync läuft **unabhängig**
+von der Drive/Photos-Web-Session (auch wenn die gerade ein Re-Auth braucht).
 
 ### Re-Auth
 

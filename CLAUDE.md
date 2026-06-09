@@ -163,8 +163,8 @@ je Ordner `Mail/<Ordner>/<uid>.eml` (rohes RFC822 inkl. Anhänge). **Ungelesen-s
 **UIDVALIDITY** wird je Ordner in `.uidvalidity` gemerkt; bei Wechsel wird der Ordner
 lokal zurückgesetzt und neu geladen. Login probiert Apple-ID und Lokalteil. Der FETCH holt
 zusätzlich `INTERNALDATE` (Server-Empfangszeit) und setzt sie via `util.set_mtime` als
-mtime der `.eml` — die Finder-Datumsspalte zeigt so das Empfangs-, nicht das Download-Datum
-(Dateiname/Schema unverändert `<uid>.eml`).
+**Änderungs- und Erstellungsdatum** der `.eml` — die Finder-Spalten zeigen so das Empfangs-,
+nicht das Download-Datum (Dateiname/Schema unverändert `<uid>.eml`).
 
 **Retry/Backoff** (`util.with_retries`): exponentielles Backoff (Default 4 Versuche, ab
 2 s) nur bei retrybaren Fehlern (HTTP 429/5xx, „throttl/rate limit/timeout"). Apple nicht
