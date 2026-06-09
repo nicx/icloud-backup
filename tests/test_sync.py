@@ -176,12 +176,15 @@ class FakeIMAP:
                 raw = msgs.get(int(uid))
             if raw is None:
                 raise imaplib.IMAP4.error(f"FETCH unbekannte UID {uid}")
-            # INTERNALDATE in der Metazeile (aus optionalem dates-Dict, sonst Default).
+            # INTERNALDATE bewusst NACH dem Body-Literal (eigenes Listenelement) — so liefert
+            # ein realer Server, wenn BODY[] vor INTERNALDATE kommt. Prüft, dass der Code ALLE
+            # Antwortteile nach INTERNALDATE absucht (nicht nur data[0][0]).
             dates = self.mailboxes[self._current].get("dates", {})
             idate = dates.get(uid) or (dates.get(int(uid)) if uid.isdigit() else None) \
                 or "01-Jan-2020 00:00:00 +0000"
-            meta = f'{uid} (INTERNALDATE "{idate}" BODY[] {{{len(raw)}}}'.encode()
-            return ("OK", [(meta, raw), b")"])
+            body_hdr = f'{uid} (BODY[] {{{len(raw)}}}'.encode()
+            trailer = f' INTERNALDATE "{idate}")'.encode()
+            return ("OK", [(body_hdr, raw), trailer])
         raise imaplib.IMAP4.error(f"unknown {command}")
 
     def logout(self):
@@ -456,11 +459,19 @@ def test_mail_sets_mtime_from_internaldate():
     def expect(idate):
         return calendar.timegm(time.strptime(idate, "%d-%b-%Y %H:%M:%S +0000"))
 
-    m1 = os.path.getmtime(os.path.join(dest, "Mail", "INBOX", "1.eml"))
-    m2 = os.path.getmtime(os.path.join(dest, "Mail", "INBOX", "2.eml"))
-    check(abs(m1 - expect("07-Jun-2026 09:15:00 +0000")) < 2, f"mail mtime #1 = INTERNALDATE (war {m1})")
-    check(abs(m2 - expect("09-Jun-2026 18:30:00 +0000")) < 2, f"mail mtime #2 = INTERNALDATE (war {m2})")
+    import sys
+
+    p1 = os.path.join(dest, "Mail", "INBOX", "1.eml")
+    p2 = os.path.join(dest, "Mail", "INBOX", "2.eml")
+    e1, e2 = expect("07-Jun-2026 09:15:00 +0000"), expect("09-Jun-2026 18:30:00 +0000")
+    m1, m2 = os.path.getmtime(p1), os.path.getmtime(p2)
+    check(abs(m1 - e1) < 2, f"mail mtime #1 = INTERNALDATE (war {m1})")
+    check(abs(m2 - e2) < 2, f"mail mtime #2 = INTERNALDATE (war {m2})")
     check(m2 > m1, "mail mtime: spätere Mail hat jüngere mtime")
+    # Erstellungsdatum (birthtime) ebenfalls gesetzt (nur macOS).
+    st1 = os.stat(p1)
+    if sys.platform == "darwin" and hasattr(st1, "st_birthtime"):
+        check(abs(st1.st_birthtime - e1) < 2, f"mail birthtime = INTERNALDATE (war {st1.st_birthtime})")
     inst = FakeIMAP.instances[0]
     check(all("PEEK" in spec for spec in inst.fetch_specs), "mail mtime: BODY.PEEK[] erhalten (ungelesen)")
 

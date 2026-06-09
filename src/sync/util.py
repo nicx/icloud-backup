@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -218,13 +219,54 @@ def _remove_empty_dirs(root: Path) -> None:
 
 
 def set_mtime(dest: Path, when: Optional[datetime]) -> None:
-    """Setzt die Änderungszeit der Datei auf ``when`` (best-effort, Fehler werden ignoriert)."""
+    """Setzt Änderungs-/Zugriffszeit (mtime/atime) auf ``when`` und – auf macOS – auch die
+    Erstellungszeit (birthtime, Finders „Erstellungsdatum").
+
+    ``os.utime`` setzt nur atime/mtime; die birthtime bleibt sonst der Schreibzeitpunkt
+    (= Sync-Zeit). Auf macOS wird sie zusätzlich per ``setattrlist`` gesetzt. Alles
+    best-effort — Fehler werden ignoriert."""
     if when is None:
         return
     try:
         ts = when.timestamp()
         os.utime(dest, (ts, ts))
     except (OSError, ValueError, OverflowError):
+        pass
+    _set_btime_darwin(dest, when)
+
+
+def _set_btime_darwin(dest: Path, when: datetime) -> None:
+    """Setzt die Erstellungszeit (ATTR_CMN_CRTIME) einer Datei auf macOS via ``setattrlist``.
+
+    No-op auf anderen Plattformen / bei jedem Fehler (z. B. Netz-FS ohne Unterstützung).
+    """
+    if sys.platform != "darwin":
+        return
+    try:
+        import ctypes
+
+        libc = ctypes.CDLL("/usr/lib/libSystem.dylib", use_errno=True)
+
+        class _Attrlist(ctypes.Structure):
+            _fields_ = [("bitmapcount", ctypes.c_ushort), ("reserved", ctypes.c_ushort),
+                        ("commonattr", ctypes.c_uint), ("volattr", ctypes.c_uint),
+                        ("dirattr", ctypes.c_uint), ("fileattr", ctypes.c_uint),
+                        ("forkattr", ctypes.c_uint)]
+
+        class _Timespec(ctypes.Structure):
+            _fields_ = [("tv_sec", ctypes.c_long), ("tv_nsec", ctypes.c_long)]
+
+        libc.setattrlist.argtypes = [ctypes.c_char_p, ctypes.c_void_p, ctypes.c_void_p,
+                                     ctypes.c_size_t, ctypes.c_ulong]
+        libc.setattrlist.restype = ctypes.c_int
+
+        ATTR_BIT_MAP_COUNT = 5
+        ATTR_CMN_CRTIME = 0x00000200
+        al = _Attrlist(ATTR_BIT_MAP_COUNT, 0, ATTR_CMN_CRTIME, 0, 0, 0, 0)
+        ts = _Timespec(int(when.timestamp()), 0)
+        libc.setattrlist(os.fsencode(str(dest)), ctypes.byref(al),
+                         ctypes.byref(ts), ctypes.sizeof(ts), 0)  # rc ignoriert (best-effort)
+    except Exception:  # noqa: BLE001 - rein kosmetisch, nie den Sync gefährden
         pass
 
 

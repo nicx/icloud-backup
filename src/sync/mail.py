@@ -267,19 +267,33 @@ def _fetch_one(imap, uid: str, dest: Path) -> None:
     ``BODY.PEEK[]`` bleibt erhalten ⇒ die Mail wird weiterhin nicht als gelesen markiert.
     """
     def _do():
-        typ, data = imap.uid("FETCH", uid, "(BODY.PEEK[] INTERNALDATE)")
-        if typ != "OK" or not data or data[0] is None:
+        # INTERNALDATE zuerst anfragen, damit sie VOR dem Body-Literal in der Antwort steht.
+        # imaplib packt alles nach dem Literal in ein separates Listenelement; daher unten
+        # robust ALLE Elemente nach INTERNALDATE absuchen (Position serverabhängig).
+        typ, data = imap.uid("FETCH", uid, "(INTERNALDATE BODY.PEEK[])")
+        if typ != "OK" or not data:
             raise imaplib.IMAP4.error(f"FETCH {typ}")
-        item = data[0]
-        raw = item[1] if isinstance(item, (tuple, list)) else None
+        raw = None
+        meta_parts: list[bytes] = []
+        for item in data:
+            if isinstance(item, (tuple, list)):
+                if item and item[0]:
+                    meta_parts.append(_as_bytes(item[0]))
+                if len(item) > 1 and item[1]:
+                    raw = item[1]
+            elif isinstance(item, (bytes, bytearray)):
+                meta_parts.append(bytes(item))
         if not raw:
             raise imaplib.IMAP4.error("FETCH leeres Ergebnis")
-        meta = item[0] if isinstance(item, (tuple, list)) else b""
-        return raw, meta
+        return raw, b" ".join(meta_parts)
 
     raw, meta = util.with_retries(_do, label=f"mail.fetch:{uid}")
     util.write_bytes(dest, raw)
     util.set_mtime(dest, _parse_internaldate(meta))  # no-op bei None
+
+
+def _as_bytes(v) -> bytes:
+    return v if isinstance(v, (bytes, bytearray)) else str(v).encode()
 
 
 def _parse_internaldate(meta) -> Optional[datetime]:
