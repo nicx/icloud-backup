@@ -17,7 +17,7 @@ from typing import Optional
 
 from .. import notify
 from ..auth import keychain, session
-from ..config.users import User, UsersStore, UserStatus
+from ..config.users import _UNSET, User, UsersStore, UserStatus
 from . import drive, mail, photos
 from .mail import MailAuthError
 
@@ -59,30 +59,34 @@ def run_user(user: User, store: Optional[UsersStore] = None, progress_cb=None) -
         if progress_cb is None:
             return None
         return lambda counts: progress_cb(user.apple_id, phase, counts)
-    def _set(status: UserStatus, last_run: Optional[str] = None) -> UserStatus:
+    def _set(status: UserStatus, last_run: Optional[str] = None,
+             last_error: object = _UNSET) -> UserStatus:
         if store is not None:
-            store.set_status(user.apple_id, status, last_run=last_run)
+            store.set_status(user.apple_id, status, last_run=last_run, last_error=last_error)
         return status
 
     _set(UserStatus.RUNNING)
 
     # 1) Ziel-Volume gemountet?
     if not is_mount_available(user.dest_base_path):
-        LOGGER.warning("Ziel-Volume nicht verfügbar für %s: %s", user.apple_id, user.dest_base_path)
+        msg = f"Ziel-Volume nicht gemountet: {user.dest_base_path}"
+        LOGGER.warning("[%s] %s", user.apple_id, msg)
         notify.notify("iCloud Sync – Ziel fehlt",
                     f"{user.apple_id}: {user.dest_base_path} ist nicht gemountet.")
-        return _set(UserStatus.ERROR)
+        return _set(UserStatus.ERROR, last_error=msg)
+
     _check_free_space(user.dest_base_path)
 
-    had_error = False
+    reasons: list[str] = []   # gesammelte Klartext-Fehlergründe (-> last_error)
     web_reauth = False
 
     # 2) Web-API (Drive/Photos) – nur wenn benötigt. Mail läuft davon unabhängig.
     if user.sync_drive or user.sync_photos:
         password = keychain.get_password(user.apple_id)
         if not password:
-            LOGGER.error("Kein Apple-ID-Passwort im Keychain für %s", user.apple_id)
-            had_error = True
+            msg = "Kein Apple-ID-Passwort im Keychain (Drive/Photos)"
+            LOGGER.error("[%s] %s", user.apple_id, msg)
+            reasons.append(msg)
         else:
             result = session.login(user.apple_id, password)
             if result.needs_2fa:
@@ -90,50 +94,63 @@ def run_user(user: User, store: Optional[UsersStore] = None, progress_cb=None) -
                 notify.notify("iCloud Sync – Re-Auth nötig",
                               f"{user.apple_id}: bitte erneut anmelden (Drive/Photos).")
             elif result.error or result.api is None:
-                LOGGER.error("Login-Fehler für %s: %s", user.apple_id, result.error)
-                had_error = True
+                msg = result.error or "Login fehlgeschlagen (Drive/Photos)"
+                LOGGER.error("[%s] %s", user.apple_id, msg)
+                reasons.append(msg)
             else:
                 api = result.api
                 try:
                     if user.sync_drive:
                         s = drive.sync_drive(api, user.dest_base_path, user.apple_id, _phase_cb("drive"))
-                        had_error = had_error or s.errors > 0
+                        if s.errors > 0:
+                            detail = f" (z. B. {s.error_paths[0]})" if s.error_paths else ""
+                            msg = f"Drive: {s.errors} Datei-Fehler{detail}"
+                            reasons.append(msg)
+                            notify.notify("iCloud Sync – Drive-Fehler", f"{user.apple_id}: {msg}")
                     if user.sync_photos:
                         ps = photos.sync_photos(api, user.dest_base_path, user.apple_id, _phase_cb("photos"))
-                        had_error = had_error or ps.errors > 0
-                except Exception:  # noqa: BLE001 - harter, unerwarteter Fehler
+                        if ps.errors > 0:
+                            msg = f"Photos: {ps.errors} Fehler"
+                            reasons.append(msg)
+                            notify.notify("iCloud Sync – Photos-Fehler", f"{user.apple_id}: {msg}")
+                except Exception as exc:  # noqa: BLE001 - harter, unerwarteter Fehler
                     LOGGER.exception("Drive/Photos-Sync für %s abgebrochen", user.apple_id)
-                    had_error = True
+                    reasons.append(f"Drive/Photos-Sync abgebrochen: {exc}")
 
     # 3) Mail (IMAP) – eigene Credentials, unabhängig von der Web-Session.
     if user.sync_mail:
         app_pw = keychain.get_mail_password(user.apple_id)
         if not app_pw:
-            LOGGER.error("Kein Mail-App-Passwort im Keychain für %s", user.apple_id)
+            msg = "Kein Mail-App-Passwort im Keychain"
+            LOGGER.error("[%s] %s", user.apple_id, msg)
             notify.notify("iCloud Sync – Mail-Passwort fehlt",
                           f"{user.apple_id}: app-spezifisches Passwort setzen.")
-            had_error = True
+            reasons.append(msg)
         else:
             try:
                 ms = mail.sync_mail(user.apple_id, app_pw, user.dest_base_path, _phase_cb("mail"))
-                had_error = had_error or ms.errors > 0
+                if ms.errors > 0:
+                    reasons.append(f"Mail: {ms.errors} Fehler")
             except MailAuthError as exc:
-                LOGGER.error("Mail-Login fehlgeschlagen für %s: %s", user.apple_id, exc)
-                notify.notify("iCloud Sync – Mail-Login",
-                              f"{user.apple_id}: App-Passwort prüfen/neu erzeugen.")
-                had_error = True
-            except Exception:  # noqa: BLE001
+                msg = "Mail-Login abgelehnt (App-Passwort prüfen/neu erzeugen)"
+                LOGGER.error("[%s] %s: %s", user.apple_id, msg, exc)
+                notify.notify("iCloud Sync – Mail-Login", f"{user.apple_id}: {msg}")
+                reasons.append(msg)
+            except Exception as exc:  # noqa: BLE001
                 LOGGER.exception("Mail-Sync für %s abgebrochen", user.apple_id)
-                had_error = True
+                reasons.append(f"Mail-Sync abgebrochen: {exc}")
 
-    # Status-Priorität: harte Fehler > Re-Auth > OK. last_run am Ende setzen.
-    if had_error:
+    # Status-Priorität: harte Fehler > Re-Auth > OK. last_run + last_error am Ende setzen.
+    if reasons:
         status = UserStatus.ERROR
+        last_error: Optional[str] = "; ".join(reasons)
     elif web_reauth:
         status = UserStatus.NEEDS_REAUTH
+        last_error = "Re-Auth nötig (2FA für Drive/Photos)"
     else:
         status = UserStatus.OK
-    return _set(status, last_run=_now_iso())
+        last_error = None  # Erfolg -> alten Grund löschen
+    return _set(status, last_run=_now_iso(), last_error=last_error)
 
 
 def run_all(store: UsersStore, progress_cb=None) -> None:
@@ -141,6 +158,7 @@ def run_all(store: UsersStore, progress_cb=None) -> None:
     for user in store.list():
         try:
             run_user(user, store, progress_cb)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             LOGGER.exception("Sync-Lauf für %s abgebrochen", user.apple_id)
-            store.set_status(user.apple_id, UserStatus.ERROR)
+            store.set_status(user.apple_id, UserStatus.ERROR,
+                             last_error=f"Lauf abgebrochen: {exc}")

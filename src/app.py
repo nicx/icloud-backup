@@ -11,6 +11,7 @@ Start (Entwicklung, ohne .app-Bundle)::
 from __future__ import annotations
 
 import logging
+import logging.handlers
 import os
 import plistlib
 import sys
@@ -23,6 +24,7 @@ import rumps
 
 from . import autostart, menubar_icon, notify
 from .auth import keychain, session
+from .config.paths import logs_dir
 from .config.settings import Settings, load_settings, save_settings
 from .config.users import User, UsersStore, UserStatus
 from .sync import engine
@@ -107,6 +109,7 @@ class SyncApp(rumps.App):
             items.append(rumps.separator)
         items.append(rumps.MenuItem("Alle jetzt synchronisieren", callback=self._sync_all))
         items.append(rumps.MenuItem("User hinzufügen…", callback=self._add_user))
+        items.append(rumps.MenuItem("Log anzeigen…", callback=self._open_log))
         items.append(rumps.MenuItem("Einstellungen…", callback=self._open_settings))
         autostart_item = rumps.MenuItem("Beim Login starten", callback=self._toggle_autostart)
         autostart_item.state = 1 if autostart.is_enabled() else 0
@@ -130,6 +133,12 @@ class SyncApp(rumps.App):
         info = rumps.MenuItem(f"Dienste: {services}  ·  Ziel: {user.dest_base_path or '—'}")
         info.set_callback(None)  # nur Info, nicht klickbar
         parent.add(info)
+        # Bei Fehler/Re-Auth den letzten Grund als nicht-klickbare Info-Zeile zeigen.
+        if user.status in (UserStatus.ERROR, UserStatus.NEEDS_REAUTH) and user.last_error:
+            reason = user.last_error if len(user.last_error) <= 80 else user.last_error[:77] + "…"
+            err = rumps.MenuItem(f"⚠️ Letzter Fehler: {reason}")
+            err.set_callback(None)
+            parent.add(err)
         parent.add(rumps.separator)
         parent.add(rumps.MenuItem("Entfernen…", callback=partial(self._remove_user, user.apple_id)))
         self._user_items[user.apple_id] = parent
@@ -356,6 +365,23 @@ class SyncApp(rumps.App):
         keychain.delete_mail_password(apple_id)
         self._rebuild_menu()
 
+    # -- Log -----------------------------------------------------------------
+
+    def _open_log(self, _sender=None) -> None:
+        """Zeigt die Log-Datei im Finder (bzw. öffnet den Logs-Ordner als Fallback)."""
+        log_path = logs_dir() / "icloud-sync.log"
+        try:
+            from AppKit import NSWorkspace
+
+            ws = NSWorkspace.sharedWorkspace()
+            if log_path.exists():
+                ws.selectFile_inFileViewerRootedAtPath_(str(log_path), "")
+            else:
+                ws.openFile_(str(logs_dir()))  # Datei noch nicht da -> Ordner öffnen
+        except Exception:  # noqa: BLE001
+            LOGGER.exception("Log konnte nicht im Finder angezeigt werden")
+            rumps.alert("Log", f"Log-Datei:\n{log_path}")
+
     # -- Einstellungen -------------------------------------------------------
 
     def _open_settings(self, _sender) -> None:
@@ -522,11 +548,63 @@ class SyncApp(rumps.App):
 
     @staticmethod
     def _spawn(fn) -> None:
-        threading.Thread(target=fn, daemon=True).start()
+        """Startet ``fn`` in einem Daemon-Thread; fängt+loggt unerwartete Fehler.
+
+        Ohne diesen Wrapper würde eine Exception im Hintergrund-Thread ihn lautlos beenden
+        (z. B. außerhalb der engine-internen try/except, beim Lock o. Ä.).
+        """
+        def _runner():
+            try:
+                fn()
+            except Exception:  # noqa: BLE001 - Thread darf nie lautlos sterben
+                LOGGER.exception("Hintergrund-Task abgebrochen: %r", getattr(fn, "__name__", fn))
+
+        threading.Thread(target=_runner, daemon=True).start()
+
+
+def _setup_logging() -> None:
+    """Root-Logger auf eine rotierende Datei (logs/icloud-sync.log) + stderr konfigurieren.
+
+    In der ``.app`` (Menüleisten-App ohne Terminal) ist stderr verloren — die Datei ist die
+    einzige verlässliche Diagnosequelle. Idempotent. Unbehandelte Exceptions (Main- und
+    Hintergrund-Threads) werden zusätzlich geloggt, statt spurlos zu verschwinden.
+    """
+    root = logging.getLogger()
+    if any(getattr(h, "_icloud_sync", False) for h in root.handlers):
+        return  # schon konfiguriert
+    root.setLevel(logging.INFO)
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+    try:
+        fh = logging.handlers.RotatingFileHandler(
+            logs_dir() / "icloud-sync.log", maxBytes=1_000_000, backupCount=5, encoding="utf-8")
+        fh.setFormatter(fmt)
+        fh._icloud_sync = True  # type: ignore[attr-defined]
+        root.addHandler(fh)
+    except OSError:
+        pass  # Datei-Logging best-effort (z. B. Ziel nicht schreibbar)
+
+    sh = logging.StreamHandler()
+    sh.setFormatter(fmt)
+    sh._icloud_sync = True  # type: ignore[attr-defined]
+    root.addHandler(sh)
+
+    def _log_uncaught(exc_type, exc, tb):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc, tb)
+            return
+        logging.getLogger("uncaught").error("Unbehandelte Exception", exc_info=(exc_type, exc, tb))
+
+    sys.excepthook = _log_uncaught
+    if hasattr(threading, "excepthook"):
+        threading.excepthook = lambda a: logging.getLogger("uncaught").error(
+            "Unbehandelte Thread-Exception in %s", a.thread,
+            exc_info=(a.exc_type, a.exc_value, a.exc_traceback))
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    _setup_logging()
+    LOGGER.info("iCloud Sync startet (Log: %s)", logs_dir() / "icloud-sync.log")
     SyncApp().run()
 
 

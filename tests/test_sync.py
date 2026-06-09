@@ -402,6 +402,54 @@ def test_engine_mount_missing():
     check(engine.run_user(bad) == UserStatus.ERROR, "engine: fehlender Mount -> ERROR")
 
 
+def test_engine_records_last_error():
+    """Fehlschlag schreibt einen Klartext-Grund in user.last_error (für Menü/Notification)."""
+    from src.config.users import UsersStore
+
+    store = UsersStore()
+    u = User(apple_id="err@example.com", dest_base_path="/nope/missing", sync_mail=True)
+    store.add(u)
+    status = engine.run_user(u, store)
+    got = store.get("err@example.com")
+    check(status == UserStatus.ERROR, f"engine: ERROR bei fehlendem Mount (war {status})")
+    check(got.last_error and "gemountet" in got.last_error,
+          f"engine: last_error nennt den Grund (war {got.last_error!r})")
+
+
+def test_engine_clears_last_error_on_success():
+    """Ein erfolgreicher Lauf löscht einen zuvor gesetzten Fehlergrund."""
+    from src.auth import session as sess, keychain
+    from src.config.users import UsersStore
+
+    dest = tempfile.mkdtemp(prefix="engineok_")
+    a = FakePhotoAsset("Z1", "P.JPG", content=b"x")
+    f1 = FakeDriveNode("d.txt", "file", size=3, content=b"abc")
+    api = FakeApi(drive_service=FakeDriveService([f1]), photos_assets=[a], url_map=dict(a._content))
+    keychain.get_password = lambda aid: "secret"
+    keychain.get_mail_password = lambda aid: "app-pw"
+    sess.login = lambda aid, pw: sess.LoginResult(api=api)
+    use_imap({"INBOX": {"uidv": 1, "msgs": {1: b"hi"}}})
+
+    store = UsersStore()
+    u = User(apple_id="ok2@example.com", sync_drive=True, sync_photos=True,
+             sync_mail=True, dest_base_path=dest)
+    store.add(u)
+    store.set_status(u.apple_id, UserStatus.ERROR, last_error="alter Fehler")
+    status = engine.run_user(u, store)
+    check(status == UserStatus.OK, f"engine: OK bei Erfolg (war {status})")
+    check(store.get(u.apple_id).last_error is None, "engine: last_error bei Erfolg gelöscht")
+
+
+def test_user_last_error_roundtrip():
+    """last_error überlebt to_dict/from_dict; alte JSON ohne Feld -> None."""
+    u = User(apple_id="r@example.com", last_error="kaputt")
+    d = u.to_dict()
+    check(d.get("last_error") == "kaputt", "user: last_error in to_dict")
+    check(User.from_dict(d).last_error == "kaputt", "user: last_error aus from_dict")
+    check(User.from_dict({"apple_id": "old@example.com"}).last_error is None,
+          "user: fehlendes last_error -> None")
+
+
 # --- Security: UID-Sanitisierung (Path-Traversal-Schutz) --------------------
 
 def test_mail_uid_traversal_blocked():
@@ -486,6 +534,9 @@ if __name__ == "__main__":
     test_engine_all_services()
     test_engine_mail_independent_of_web()
     test_engine_mount_missing()
+    test_engine_records_last_error()
+    test_engine_clears_last_error_on_success()
+    test_user_last_error_roundtrip()
     for m in PASS:
         print("  ok:", m)
     print(f"\nALL {len(PASS)} SYNC TESTS PASSED")

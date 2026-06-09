@@ -78,9 +78,18 @@ laufen davon unbeeinflusst weiter.
 |-------|-----|
 | Globale Settings | `~/Library/Application Support/icloud-sync/settings.json` |
 | User-Liste (ohne Passwort) | `~/Library/Application Support/icloud-sync/users.json` |
+| Log-Datei (rotierend) | `~/Library/Application Support/icloud-sync/logs/icloud-sync.log` |
 | Trusted-Session-Cookies | `~/Library/Application Support/icloud-sync/sessions/<apple-id>/` |
 | Apple-ID-Passwort (Drive/Photos) | macOS-Keychain (Service `icloud-sync`) |
 | App-spezifisches Passwort (Mail) | macOS-Keychain (Service `icloud-sync-mail`) |
+
+### Logging & Fehlerdiagnose
+
+Alle Läufe werden in eine **rotierende Log-Datei** geschrieben
+(`…/logs/icloud-sync.log`, 1 MB × 5) — in der Menüleisten-App die einzige verlässliche
+Quelle (stderr ist dort verloren). Menüpunkt **„Log anzeigen…"** öffnet sie im Finder.
+Schlägt ein Dienst fehl, steht der **Grund im Klartext** im User-Untermenü
+(„⚠️ Letzter Fehler: …") und in einer Notification (auch Drive/Photos-Fehler).
 
 ### Backup-Ablage auf dem Ziel-Volume
 

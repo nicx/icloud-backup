@@ -14,6 +14,9 @@ from typing import Optional
 
 from .paths import users_file
 
+# Sentinel für "Argument nicht übergeben" (um None als gültigen Wert zuzulassen).
+_UNSET = object()
+
 
 class UserStatus(str, Enum):
     """Status eines Users im Backup-Lebenszyklus.
@@ -48,6 +51,7 @@ class User:
     dest_base_path: str = ""
     status: UserStatus = UserStatus.IDLE
     last_run: Optional[str] = None
+    last_error: Optional[str] = None  # Klartext-Grund des letzten Fehlers (für Menü/Notification)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -69,6 +73,7 @@ class User:
             dest_base_path=raw.get("dest_base_path", ""),
             status=status_enum,
             last_run=raw.get("last_run"),
+            last_error=raw.get("last_error"),
         )
 
 
@@ -135,14 +140,22 @@ class UsersStore:
                 return
         raise KeyError(f"Unbekannter User: {user.apple_id}")
 
-    def set_status(self, apple_id: str, status: UserStatus, last_run: Optional[str] = None) -> None:
-        """Bequemer Helfer: Status (und optional last_run) eines Users aktualisieren."""
+    def set_status(self, apple_id: str, status: UserStatus, last_run: Optional[str] = None,
+                   last_error: object = _UNSET) -> None:
+        """Bequemer Helfer: Status (und optional last_run/last_error) eines Users aktualisieren.
+
+        ``last_error`` nutzt einen Sentinel-Default: nur wenn explizit übergeben, wird es
+        gesetzt (``None`` löscht den Grund, ein String setzt ihn). So überschreiben Aufrufer,
+        die nur den Status ändern, den letzten Fehlergrund nicht versehentlich.
+        """
         u = self.get(apple_id)
         if u is None:
             raise KeyError(f"Unbekannter User: {apple_id}")
         u.status = status
         if last_run is not None:
             u.last_run = last_run
+        if last_error is not _UNSET:
+            u.last_error = last_error  # type: ignore[assignment]
         self.save()
 
     def remove(self, apple_id: str) -> None:

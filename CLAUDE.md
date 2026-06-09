@@ -127,6 +127,7 @@ Pro User (`User`-Dataclass, persistiert als `users.json` in App Support):
   Engine `Drive/`, `Photos/`, `Mail/` an
 - `status`: `idle` / `running` / `ok` / `needs_reauth` / `error`
 - `last_run`: ISO-8601-Zeitstempel (UTC) des letzten erfolgreichen Laufbeginns
+- `last_error`: Klartext-Grund des letzten Fehlers (für Menü/Notification; `None` bei Erfolg)
 
 Passwörter stehen **nie** in `users.json` — nur im Keychain.
 
@@ -185,6 +186,21 @@ Fallstrick #7). Nach außen nur stabile Typen (`LoginResult`, `UserStatus`).
 - Re-Auth-Flow im UI: 2FA-Code eingeben → `validate_2fa_code` → `trust_session`.
 - Betroffener User wird vom Auto-Sync ausgesetzt; andere User laufen weiter. Mail des
   betroffenen Users läuft trotzdem (eigene Credentials).
+
+## Logging & Fehlerdiagnose
+
+`app._setup_logging()` (in `main()`) konfiguriert den Root-Logger auf eine **rotierende
+Datei** `~/Library/Application Support/icloud-sync/logs/icloud-sync.log` (1 MB × 5) **plus**
+stderr (für Dev). In der `.app` ist stderr verloren — die Datei ist die einzige
+verlässliche Quelle (`paths.logs_dir()` ist damit verdrahtet). Zusätzlich werden
+unbehandelte Exceptions via `sys.excepthook`/`threading.excepthook` geloggt, und `_spawn`
+kapselt jeden Hintergrund-Task in try/except (kein lautloses Thread-Sterben).
+
+**Fehlergrund sichtbar:** `engine.run_user` sammelt je Fehlerpfad einen knappen Klartext
+und legt ihn (über `UsersStore.set_status(..., last_error=…)`) in `User.last_error` ab —
+bei Erfolg `None` (gelöscht). Das Menü zeigt ihn im User-Untermenü als „⚠️ Letzter Fehler:
+…", und Drive/Photos-Fehler (früher still) lösen jetzt ebenfalls eine Notification aus.
+Menüpunkt **„Log anzeigen…"** zeigt die Datei im Finder (`NSWorkspace`).
 
 ## Bekannte Fallstricke (im Code berücksichtigt)
 
