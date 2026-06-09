@@ -74,7 +74,9 @@ Trennung im Code, NICHT in separate Prozesse:
   „fällige" User und stößt den Sync an; ein schneller Tick (1 s) aktualisiert nur die
   Live-Anzeige. **Missed-Run-Catch-up**: Fälligkeit = `now - last_run >=
   sync_interval_hours` (Default 4 h) — war der Mac im Sleep, ist `last_run` alt und der
-  User sofort fällig. `needs_reauth`/`error`-User werden nicht automatisch gesynct.
+  User sofort fällig. `needs_reauth`- und `running`-User werden vom Auto-Sync
+  ausgenommen (`_is_due`); `error`-User werden beim nächsten Fälligkeitsfenster
+  hingegen wieder mitgenommen (automatischer Retry).
 - **Sync-Engine** (`src/sync/engine.py`): orchestriert pro User Mount-Check →
   Drive/Photos (Web) → Mail (IMAP). Eigenständig ohne UI aufrufbar (Tests/Debug). Ein
   Fehler bei einem User/Dienst stoppt die anderen nicht. **Mail läuft unabhängig von der
