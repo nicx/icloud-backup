@@ -176,7 +176,12 @@ class FakeIMAP:
                 raw = msgs.get(int(uid))
             if raw is None:
                 raise imaplib.IMAP4.error(f"FETCH unbekannte UID {uid}")
-            return ("OK", [(f"{uid} (BODY[] {{{len(raw)}}}".encode(), raw), b")"])
+            # INTERNALDATE in der Metazeile (aus optionalem dates-Dict, sonst Default).
+            dates = self.mailboxes[self._current].get("dates", {})
+            idate = dates.get(uid) or (dates.get(int(uid)) if uid.isdigit() else None) \
+                or "01-Jan-2020 00:00:00 +0000"
+            meta = f'{uid} (INTERNALDATE "{idate}" BODY[] {{{len(raw)}}}'.encode()
+            return ("OK", [(meta, raw), b")"])
         raise imaplib.IMAP4.error(f"unknown {command}")
 
     def logout(self):
@@ -433,11 +438,39 @@ def test_session_dir_perms():
     check(fmode == 0o600, f"session-Datei 0600 (war {oct(fmode)})")
 
 
+def test_mail_sets_mtime_from_internaldate():
+    """Die .eml-mtime trägt das IMAP-INTERNALDATE (Empfangszeit), nicht die Download-Zeit."""
+    import calendar
+    import time
+
+    dest = tempfile.mkdtemp(prefix="mailmtime_")
+    boxes = {
+        "INBOX": {"uidv": 1,
+                  "msgs": {1: b"From: a\r\n\r\nfrueh", 2: b"From: b\r\n\r\nspaet"},
+                  "dates": {1: "07-Jun-2026 09:15:00 +0000",
+                            2: "09-Jun-2026 18:30:00 +0000"}},
+    }
+    use_imap(boxes)
+    mail.sync_mail("u@icloud.com", "app-pw", dest)
+
+    def expect(idate):
+        return calendar.timegm(time.strptime(idate, "%d-%b-%Y %H:%M:%S +0000"))
+
+    m1 = os.path.getmtime(os.path.join(dest, "Mail", "INBOX", "1.eml"))
+    m2 = os.path.getmtime(os.path.join(dest, "Mail", "INBOX", "2.eml"))
+    check(abs(m1 - expect("07-Jun-2026 09:15:00 +0000")) < 2, f"mail mtime #1 = INTERNALDATE (war {m1})")
+    check(abs(m2 - expect("09-Jun-2026 18:30:00 +0000")) < 2, f"mail mtime #2 = INTERNALDATE (war {m2})")
+    check(m2 > m1, "mail mtime: spätere Mail hat jüngere mtime")
+    inst = FakeIMAP.instances[0]
+    check(all("PEEK" in spec for spec in inst.fetch_specs), "mail mtime: BODY.PEEK[] erhalten (ungelesen)")
+
+
 if __name__ == "__main__":
     test_drive()
     test_photos()
     test_mail()
     test_mail_uid_traversal_blocked()
+    test_mail_sets_mtime_from_internaldate()
     test_session_dir_perms()
     test_engine_all_services()
     test_engine_mail_independent_of_web()

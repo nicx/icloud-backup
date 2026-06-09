@@ -8,6 +8,9 @@ Eigenschaften:
 - **Echte Ordnerstruktur** wie in iCloud Mail (IMAP-modified-UTF-7-Namen werden dekodiert).
 - **Ungelesen-schonend:** ``select(readonly=True)`` + ``BODY.PEEK[]`` ⇒ Mails werden nicht als
   gelesen markiert und keine Flags verändert.
+- **Empfangsdatum:** beim Download wird ``INTERNALDATE`` (Server-Empfangszeit) mitgeholt und als
+  mtime der ``.eml`` gesetzt ⇒ Finder-Datumsspalte/Sortierung zeigen die Empfangszeit, nicht
+  die Download-Zeit.
 - **Inkrementell:** nur UIDs ohne lokale ``<uid>.eml`` werden geladen.
 - **Spiegel:** lokale Mails/Ordner, die es serverseitig nicht mehr gibt, werden entfernt — aber
   **nur** nach vollständigem, fehlerfreiem Listing aller Ordner (Guard ``complete``). Historie ⇒ Snapshots.
@@ -23,7 +26,9 @@ import base64
 import imaplib
 import logging
 import re
+import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -255,18 +260,42 @@ def _sync_folder(imap, raw_name: str, sep: str, mail_root: Path, stats: MailStat
 
 
 def _fetch_one(imap, uid: str, dest: Path) -> None:
-    """Lädt eine Mail (BODY.PEEK[] = ohne \\Seen) und schreibt sie als ``.eml``."""
+    """Lädt eine Mail (BODY.PEEK[] = ohne \\Seen) und schreibt sie als ``.eml``.
+
+    Holt zugleich ``INTERNALDATE`` (Server-Empfangszeit) mit und setzt sie als mtime der
+    Datei — so trägt die Finder-Datumsspalte das echte Empfangsdatum statt der Download-Zeit.
+    ``BODY.PEEK[]`` bleibt erhalten ⇒ die Mail wird weiterhin nicht als gelesen markiert.
+    """
     def _do():
-        typ, data = imap.uid("FETCH", uid, "(BODY.PEEK[])")
+        typ, data = imap.uid("FETCH", uid, "(BODY.PEEK[] INTERNALDATE)")
         if typ != "OK" or not data or data[0] is None:
             raise imaplib.IMAP4.error(f"FETCH {typ}")
-        raw = data[0][1] if isinstance(data[0], (tuple, list)) else None
+        item = data[0]
+        raw = item[1] if isinstance(item, (tuple, list)) else None
         if not raw:
             raise imaplib.IMAP4.error("FETCH leeres Ergebnis")
-        return raw
+        meta = item[0] if isinstance(item, (tuple, list)) else b""
+        return raw, meta
 
-    raw = util.with_retries(_do, label=f"mail.fetch:{uid}")
+    raw, meta = util.with_retries(_do, label=f"mail.fetch:{uid}")
     util.write_bytes(dest, raw)
+    util.set_mtime(dest, _parse_internaldate(meta))  # no-op bei None
+
+
+def _parse_internaldate(meta) -> Optional[datetime]:
+    """Extrahiert ``INTERNALDATE`` aus der FETCH-Metazeile als ``datetime`` (oder ``None``).
+
+    Nutzt die Stdlib (``imaplib.Internaldate2tuple`` liefert lokale ``time.struct_time``).
+    Vollständig gekapselt — ein fehlendes/unparsebares Datum darf den Lauf nie kippen.
+    """
+    try:
+        line = meta if isinstance(meta, (bytes, bytearray)) else str(meta).encode()
+        tt = imaplib.Internaldate2tuple(line)
+        if tt is None:
+            return None
+        return datetime.fromtimestamp(time.mktime(tt))
+    except Exception:  # noqa: BLE001 - mtime ist best-effort
+        return None
 
 
 def _uidvalidity(imap, quoted: str) -> Optional[int]:
