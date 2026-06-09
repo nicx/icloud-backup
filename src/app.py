@@ -11,6 +11,8 @@ Start (Entwicklung, ohne .app-Bundle)::
 from __future__ import annotations
 
 import logging
+import os
+import plistlib
 import sys
 import threading
 from datetime import datetime, timedelta, timezone
@@ -379,11 +381,24 @@ class SyncApp(rumps.App):
     def _autostart_program_args() -> Optional[list[str]]:
         """Programmargumente für den LaunchAgent – nur sinnvoll im gebauten Bundle.
 
-        py2app setzt ``sys.frozen``; das Bundle-Executable liegt in ``…app/Contents/MacOS/``.
+        py2app setzt ``sys.frozen``. ACHTUNG: ``sys.executable`` zeigt im Bundle auf
+        ``…/Contents/MacOS/python`` (den eingebetteten Interpreter), NICHT auf den
+        App-Loader-Stub (``CFBundleExecutable``). Würde der LaunchAgent ``python`` direkt
+        starten, käme nur ein nackter Interpreter hoch und die Menüleisten-App erschiene
+        nie. Daher den echten Bundle-Executable auflösen (Stub triggert ``__boot__`` →
+        ``launcher.py`` → ``main()``, genau wie ein Doppelklick).
         """
         if not getattr(sys, "frozen", False):
             return None
-        return [sys.executable]
+        macos_dir = os.path.dirname(sys.executable)              # …/Contents/MacOS
+        bundle = os.path.dirname(os.path.dirname(macos_dir))     # …/iCloud Sync.app
+        exe_name = os.path.splitext(os.path.basename(bundle))[0]  # Default: App-Name
+        try:
+            with open(os.path.join(bundle, "Contents", "Info.plist"), "rb") as fh:
+                exe_name = plistlib.load(fh).get("CFBundleExecutable") or exe_name
+        except (OSError, plistlib.InvalidFileException):
+            pass
+        return [os.path.join(macos_dir, exe_name)]
 
     # -- Sync-Anstoß ---------------------------------------------------------
 
