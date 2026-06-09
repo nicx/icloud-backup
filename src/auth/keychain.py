@@ -55,11 +55,23 @@ def delete_mail_password(apple_id: str) -> None:
 
 
 def _get_with_migration(service: str, legacy: str, apple_id: str) -> Optional[str]:
-    """Liest ``service``; fällt auf ``legacy`` zurück und migriert den Eintrag dann."""
-    value = keyring.get_password(service, apple_id)
+    """Liest ``service``; fällt auf ``legacy`` zurück und migriert den Eintrag dann.
+
+    Lesezugriffe sind abgesichert: Schlägt der Keychain-Zugriff fehl (z. B. weil der
+    Alt-Eintrag eine ACL für eine frühere App-Signatur hat und der Zugriff verweigert
+    wird), liefert die Funktion ``None`` statt zu werfen — so kippt ein Keychain-
+    Problem nicht den ganzen Sync-Lauf, sondern führt nur zu „Passwort fehlt".
+    """
+    try:
+        value = keyring.get_password(service, apple_id)
+    except keyring.errors.KeyringError:
+        value = None
     if value is not None:
         return value
-    legacy_value = keyring.get_password(legacy, apple_id)
+    try:
+        legacy_value = keyring.get_password(legacy, apple_id)
+    except keyring.errors.KeyringError:
+        return None
     if legacy_value is not None:
         try:
             keyring.set_password(service, apple_id, legacy_value)

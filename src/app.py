@@ -62,6 +62,7 @@ class SyncApp(rumps.App):
         super().__init__("iCloud Sync", title=ICON_OK, quit_button=None)
         self.settings: Settings = load_settings()
         self.store: UsersStore = UsersStore.loaded()
+        self._reset_stale_running()
         self._sync_lock = threading.Lock()  # verhindert überlappende Sync-Läufe
         self._progress: dict = {}           # apple_id -> {"drive": {...}, "photos": {...}}
         self._user_items: dict = {}         # apple_id -> rumps.MenuItem (für Live-Updates)
@@ -78,6 +79,20 @@ class SyncApp(rumps.App):
         self.ui_timer.start()
         # Beim Start einmal die Sessions prüfen (im Hintergrund), damit needs_reauth früh sichtbar ist.
         self._spawn(self._refresh_sessions)
+
+    def _reset_stale_running(self) -> None:
+        """Persistierten ``running``-Status beim Start auf ``idle`` zurücksetzen.
+
+        Ein frischer Prozess hat ein frisches Lock — es kann beim Start kein Sync aktiv
+        sein. Ein in ``users.json`` stehender ``running``-Status stammt also aus einem
+        abgebrochenen Lauf (Crash/Quit/Sleep) und würde den User sonst **dauerhaft** vom
+        Auto-Sync ausschließen, weil sowohl ``_is_due`` als auch ``_refresh_sessions``
+        ``running``-User überspringen.
+        """
+        for user in self.store.list():
+            if user.status == UserStatus.RUNNING:
+                LOGGER.info("Setze hängenden 'running'-Status für %s zurück", user.apple_id)
+                self.store.set_status(user.apple_id, UserStatus.IDLE)
 
     # -- Menüaufbau ----------------------------------------------------------
 
