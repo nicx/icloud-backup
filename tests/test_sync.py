@@ -160,15 +160,22 @@ class FakeIMAP:
         return ("OK", [f"{name} (UIDVALIDITY {uidv})".encode()])
 
     def uid(self, command, *args):
+        msgs = self.mailboxes[self._current]["msgs"]
         if command.upper() == "SEARCH":
             if self._current in self.search_fail:
                 raise imaplib.IMAP4.error("SEARCH boom")
-            uids = " ".join(str(u) for u in sorted(self.mailboxes[self._current]["msgs"]))
+            # key=str: erlaubt gemischte int-/str-UIDs (für den Traversal-Test).
+            uids = " ".join(str(u) for u in sorted(msgs, key=str))
             return ("OK", [uids.encode()])
         if command.upper() == "FETCH":
-            uid = int(args[0])
+            uid = args[0].decode() if isinstance(args[0], (bytes, bytearray)) else str(args[0])
             self.fetch_specs.append(args[1])
-            raw = self.mailboxes[self._current]["msgs"][uid]
+            # int- ODER str-gekeyte msgs-Dicts tolerieren.
+            raw = msgs.get(uid)
+            if raw is None and uid.isdigit():
+                raw = msgs.get(int(uid))
+            if raw is None:
+                raise imaplib.IMAP4.error(f"FETCH unbekannte UID {uid}")
             return ("OK", [(f"{uid} (BODY[] {{{len(raw)}}}".encode(), raw), b")"])
         raise imaplib.IMAP4.error(f"unknown {command}")
 
@@ -387,10 +394,51 @@ def test_engine_mount_missing():
     check(engine.run_user(bad) == UserStatus.ERROR, "engine: fehlender Mount -> ERROR")
 
 
+# --- Security: UID-Sanitisierung (Path-Traversal-Schutz) --------------------
+
+def test_mail_uid_traversal_blocked():
+    """Eine bösartige, nicht-numerische UID darf keine Datei außerhalb von Mail/ schreiben."""
+    dest = tempfile.mkdtemp(prefix="mailuid_")
+    boxes = {
+        # Gültige UID "1" + Angriffs-UID mit Pfad-Traversal (würde nach dest/evil.eml schreiben).
+        "INBOX": {"uidv": 1, "msgs": {"1": b"From: a\r\n\r\nok", "../../evil": b"pwn"}},
+    }
+    use_imap(boxes)
+    s = mail.sync_mail("u@icloud.com", "app-pw", dest)
+    check(os.path.exists(os.path.join(dest, "Mail", "INBOX", "1.eml")), "mail uid: gültige UID geladen")
+    check(s.downloaded == 1, f"mail uid: nur die gültige UID geladen (dl={s.downloaded})")
+    # Der Traversal-Pfad Mail/INBOX/../../evil.eml == dest/evil.eml darf NICHT existieren.
+    check(not os.path.exists(os.path.join(dest, "evil.eml")), "mail uid: Traversal-Datei NICHT geschrieben")
+    eml = [f for f in listdir(dest, "Mail", "INBOX") if f.endswith(".eml")]
+    check(eml == ["1.eml"], f"mail uid: nur 1.eml im Ordner ({eml})")
+
+
+# --- Security: Session-Verzeichnis-Rechte (Token-Schutz) --------------------
+
+def test_session_dir_perms():
+    """session_dir ist 0700 und reduziert enthaltene Dateien auf 0600 (Tokens umgehen 2FA)."""
+    import stat
+    from src.config import paths
+
+    d = paths.session_dir("perm@example.com")
+    mode = stat.S_IMODE(os.stat(d).st_mode)
+    check(mode == 0o700, f"session_dir 0700 (war {oct(mode)})")
+
+    # pyicloud legt Dateien teils 0644 an -> nächster Aufruf muss sie auf 0600 ziehen.
+    f = d / "x.session"
+    f.write_bytes(b"token")
+    os.chmod(f, 0o644)
+    paths.session_dir("perm@example.com")
+    fmode = stat.S_IMODE(os.stat(f).st_mode)
+    check(fmode == 0o600, f"session-Datei 0600 (war {oct(fmode)})")
+
+
 if __name__ == "__main__":
     test_drive()
     test_photos()
     test_mail()
+    test_mail_uid_traversal_blocked()
+    test_session_dir_perms()
     test_engine_all_services()
     test_engine_mail_independent_of_web()
     test_engine_mount_missing()

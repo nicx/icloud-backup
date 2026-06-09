@@ -173,7 +173,9 @@ hämmern.
 Fallstrick #7). Nach außen nur stabile Typen (`LoginResult`, `UserStatus`).
 
 - Trusted-Session-Cookies pro User in `~/Library/Application Support/icloud-sync/sessions/<id>/`
-  (überlebt App-Updates).
+  (überlebt App-Updates). Dieses Verzeichnis wird auf `0700`, enthaltene Dateien best-effort
+  auf `0600` gesetzt (`paths._restrict_session_perms`) — die Tokens umgehen Passwort **und**
+  2FA, sind also so schützenswert wie Credentials.
 - Abgelaufene Session / `requires_2fa`/`2sa` → `UserStatus.NEEDS_REAUTH`, **rotes Badge**
   am Menüleisten-Icon, macOS-Notification. `check_session` prüft das beim App-Start, ohne
   einen vollen Sync zu starten.

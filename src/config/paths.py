@@ -58,11 +58,37 @@ def _safe_name(apple_id: str) -> str:
 def session_dir(apple_id: str) -> Path:
     """Pro-User-Verzeichnis für pyicloud-Cookies (Trusted-Session).
 
-    Wird als ``cookie_directory`` an ``PyiCloudService`` übergeben. Wird bei Bedarf angelegt.
+    Wird als ``cookie_directory`` an ``PyiCloudService`` übergeben. Wird bei Bedarf angelegt
+    und auf den Eigentümer beschränkt (siehe :func:`_restrict_session_perms`).
     """
     d = app_support_dir() / "sessions" / _safe_name(apple_id)
     d.mkdir(parents=True, exist_ok=True)
+    _restrict_session_perms(d)
     return d
+
+
+def _restrict_session_perms(d: Path) -> None:
+    """Beschränkt Session-Verzeichnis (0700) und enthaltene Dateien (0600) auf den Eigentümer.
+
+    Die hier abgelegten Trusted-Session-Tokens umgehen Passwort **und** 2FA — sie sind
+    so schützenswert wie Credentials. pyicloud legt manche Dateien jedoch als 0644 (welt-
+    lesbar) an. Best-effort: Das Verzeichnis auf 0700 zu setzen verhindert den Zugriff
+    anderer lokaler User auch dann, wenn einzelne Dateien noch 0644 sind. Fehler (z. B. auf
+    einem Netz-FS ohne POSIX-Modes) werden ignoriert.
+    """
+    try:
+        os.chmod(d, 0o700)
+    except OSError:
+        pass
+    try:
+        for f in d.iterdir():
+            if f.is_file():
+                try:
+                    os.chmod(f, 0o600)
+                except OSError:
+                    pass
+    except OSError:
+        pass
 
 
 def logs_dir() -> Path:

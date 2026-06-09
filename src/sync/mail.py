@@ -230,6 +230,12 @@ def _sync_folder(imap, raw_name: str, sep: str, mail_root: Path, stats: MailStat
     seen = 0
     for uid_b in server_uids:
         uid = uid_b.decode() if isinstance(uid_b, (bytes, bytearray)) else str(uid_b)
+        # IMAP-UIDs sind laut RFC 3501 reine Ziffern. Alles andere (führt sonst über den
+        # `{uid}.eml`-Pfad zu Path-Traversal, falls ein bösartiger/MITM-Server krude UIDs
+        # liefert) wird defensiv übersprungen — Apple-Endpoint, aber Server-Input nie blind trauen.
+        if not uid.isdigit():
+            LOGGER.warning("Ungültige IMAP-UID in %s übersprungen: %r", raw_name, uid)
+            continue
         dest = folder_dir / f"{uid}.eml"
         expected.add(dest)
         if dest.exists():
