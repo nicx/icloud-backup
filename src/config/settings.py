@@ -22,11 +22,20 @@ class Settings:
     :param sync_interval_hours: Mindestabstand zwischen zwei Sync-Läufen je User.
     :param autostart: Beim Login automatisch starten (Verdrahtung folgt späterer Durchgang).
     :param notifications: macOS-Notifications aktiviert.
+    :param error_email_enabled: bei Fehler/Re-Auth eine E-Mail verschicken (über lokales Relay).
+    :param error_email_to: Empfänger der Fehler-Mails (leer = aus).
+    :param error_email_from: Absender; leer ⇒ es wird ``error_email_to`` genutzt.
+    :param smtp_host/smtp_port: lokales Mail-Relay (Default: MailRelay-Projekt, 127.0.0.1:2525).
     """
 
     sync_interval_hours: int = DEFAULT_SYNC_INTERVAL_HOURS
     autostart: bool = False
     notifications: bool = True
+    error_email_enabled: bool = False
+    error_email_to: str = ""
+    error_email_from: str = ""
+    smtp_host: str = "127.0.0.1"
+    smtp_port: int = 2525
 
 
 def load_settings() -> Settings:

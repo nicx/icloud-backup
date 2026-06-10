@@ -450,6 +450,36 @@ def test_user_last_error_roundtrip():
           "user: fehlendes last_error -> None")
 
 
+def test_engine_emails_on_new_problem():
+    """Fehler-Mail nur bei aktiviertem Setting UND neuem/geändertem Problem (kein Spam)."""
+    from src import notify
+    from src.config.settings import Settings, save_settings
+    from src.config.users import UsersStore
+
+    save_settings(Settings(error_email_enabled=True, error_email_to="ops@example.com"))
+    sent: list = []
+    orig = notify.send_mail
+    notify.send_mail = lambda *a, **k: (sent.append(a) or True)
+    try:
+        store = UsersStore()
+        u = User(apple_id="mailerr@example.com", dest_base_path="/nope/missing", sync_mail=True)
+        store.add(u)
+        engine.run_user(u, store)   # neuer Fehler -> 1 Mail
+        check(len(sent) == 1, f"mail-alert: 1 Mail bei neuem Fehler (war {len(sent)})")
+        engine.run_user(u, store)   # identischer Fehler -> keine weitere
+        check(len(sent) == 1, f"mail-alert: keine weitere bei gleichem Fehler (war {len(sent)})")
+
+        # deaktiviert -> keine Mail, auch bei frischem Fehler
+        save_settings(Settings(error_email_enabled=False, error_email_to="ops@example.com"))
+        u2 = User(apple_id="mailerr2@example.com", dest_base_path="/nope/missing")
+        store.add(u2)
+        engine.run_user(u2, store)
+        check(len(sent) == 1, "mail-alert: deaktiviert -> keine Mail")
+    finally:
+        notify.send_mail = orig
+        save_settings(Settings())  # Settings zurücksetzen (andere Tests unbeeinflusst)
+
+
 # --- Security: UID-Sanitisierung (Path-Traversal-Schutz) --------------------
 
 def test_mail_uid_traversal_blocked():
@@ -537,6 +567,7 @@ if __name__ == "__main__":
     test_engine_records_last_error()
     test_engine_clears_last_error_on_success()
     test_user_last_error_roundtrip()
+    test_engine_emails_on_new_problem()
     for m in PASS:
         print("  ok:", m)
     print(f"\nALL {len(PASS)} SYNC TESTS PASSED")

@@ -17,6 +17,8 @@ from typing import Optional
 
 from .. import notify
 from ..auth import keychain, session
+from ..config.paths import logs_dir
+from ..config.settings import load_settings
 from ..config.users import _UNSET, User, UsersStore, UserStatus
 from . import drive, mail, photos
 from .mail import MailAuthError
@@ -59,10 +61,18 @@ def run_user(user: User, store: Optional[UsersStore] = None, progress_cb=None) -
         if progress_cb is None:
             return None
         return lambda counts: progress_cb(user.apple_id, phase, counts)
+    # Zustand VOR dem Lauf merken (für „nur bei neuem/geändertem Problem"-Mail).
+    prev_status, prev_error = user.status, user.last_error
+
     def _set(status: UserStatus, last_run: Optional[str] = None,
              last_error: object = _UNSET) -> UserStatus:
         if store is not None:
             store.set_status(user.apple_id, status, last_run=last_run, last_error=last_error)
+        return status
+
+    def _finalize(status: UserStatus, last_error: Optional[str], last_run: Optional[str]) -> UserStatus:
+        _set(status, last_run=last_run, last_error=last_error)
+        _maybe_send_problem_email(user, status, last_error, prev_status, prev_error)
         return status
 
     _set(UserStatus.RUNNING)
@@ -73,7 +83,7 @@ def run_user(user: User, store: Optional[UsersStore] = None, progress_cb=None) -
         LOGGER.warning("[%s] %s", user.apple_id, msg)
         notify.notify("iCloud Sync – Ziel fehlt",
                     f"{user.apple_id}: {user.dest_base_path} ist nicht gemountet.")
-        return _set(UserStatus.ERROR, last_error=msg)
+        return _finalize(UserStatus.ERROR, msg, last_run=None)
 
     _check_free_space(user.dest_base_path)
 
@@ -150,7 +160,40 @@ def run_user(user: User, store: Optional[UsersStore] = None, progress_cb=None) -
     else:
         status = UserStatus.OK
         last_error = None  # Erfolg -> alten Grund löschen
-    return _set(status, last_run=_now_iso(), last_error=last_error)
+    return _finalize(status, last_error, last_run=_now_iso())
+
+
+def _maybe_send_problem_email(user: User, status: UserStatus, last_error: Optional[str],
+                              prev_status: UserStatus, prev_error: Optional[str]) -> None:
+    """Schickt bei einem **neuen oder geänderten** Problem (ERROR/NEEDS_REAUTH) eine Mail.
+
+    Nur wenn in den Settings aktiviert und ein Empfänger gesetzt ist. „Neu/geändert" =
+    Status hat zuvor nicht schon mit identischem Grund vorgelegen → kein Spam bei mehreren
+    fehlgeschlagenen Läufen in Folge. Versand best-effort über das lokale Relay (notify.send_mail).
+    """
+    if status not in (UserStatus.ERROR, UserStatus.NEEDS_REAUTH):
+        return
+    if status == prev_status and last_error == prev_error:
+        return  # unverändertes Problem -> nicht erneut mailen
+    try:
+        settings = load_settings()
+    except Exception:  # noqa: BLE001
+        return
+    if not settings.error_email_enabled or not settings.error_email_to:
+        return
+    sender = settings.error_email_from or settings.error_email_to
+    subject = f"iCloud Sync: Problem bei {user.apple_id} ({status.value})"
+    body = (
+        "iCloud Sync meldet ein Problem.\n\n"
+        f"Account: {user.apple_id}\n"
+        f"Status:  {status.value}\n"
+        f"Grund:   {last_error or '—'}\n"
+        f"Zeit:    {_now_iso()}\n"
+        f"Ziel:    {user.dest_base_path}\n\n"
+        f"Details im Log: {logs_dir() / 'icloud-sync.log'}\n"
+    )
+    notify.send_mail(settings.smtp_host, int(settings.smtp_port), sender,
+                     settings.error_email_to, subject, body)
 
 
 def run_all(store: UsersStore, progress_cb=None) -> None:

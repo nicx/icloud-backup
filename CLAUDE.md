@@ -202,6 +202,15 @@ bei Erfolg `None` (gelöscht). Das Menü zeigt ihn im User-Untermenü als „⚠
 …", und Drive/Photos-Fehler (früher still) lösen jetzt ebenfalls eine Notification aus.
 Menüpunkt **„Log anzeigen…"** zeigt die Datei im Finder (`NSWorkspace`).
 
+**Fehler-E-Mail (optional):** Bei `error`/`needs_reauth` kann `engine._maybe_send_problem_email`
+eine Mail verschicken — **nur bei neuem/geändertem Problem** (kein Spam bei wiederholtem
+gleichem Fehler). Versand über `notify.send_mail` per **einfachem SMTP** an ein lokales Relay
+(Default `127.0.0.1:2525` → Projekt **MailRelay**, das Upstream-Auth/TLS/Retry übernimmt; kein
+Auth/TLS auf dem Loopback-Hop). Konfiguration in `Settings` (`error_email_enabled`,
+`error_email_to`, `error_email_from`, `smtp_host`, `smtp_port`) bzw. im Menü unter
+**„Fehler-E-Mail …"** (Aktiv-Toggle, Empfänger, Test-E-Mail). Adresse liegt in `settings.json`
+(App Support), nie im Repo.
+
 ## Bekannte Fallstricke (im Code berücksichtigt)
 
 1. **Session-Ablauf / 2FA-Re-Auth** – siehe oben. Häufigster Ausfallgrund.

@@ -110,6 +110,7 @@ class SyncApp(rumps.App):
         items.append(rumps.MenuItem("Alle jetzt synchronisieren", callback=self._sync_all))
         items.append(rumps.MenuItem("User hinzufügen…", callback=self._add_user))
         items.append(rumps.MenuItem("Log anzeigen…", callback=self._open_log))
+        items.append(self._error_email_menu())
         items.append(rumps.MenuItem("Einstellungen…", callback=self._open_settings))
         autostart_item = rumps.MenuItem("Beim Login starten", callback=self._toggle_autostart)
         autostart_item.state = 1 if autostart.is_enabled() else 0
@@ -381,6 +382,63 @@ class SyncApp(rumps.App):
         except Exception:  # noqa: BLE001
             LOGGER.exception("Log konnte nicht im Finder angezeigt werden")
             rumps.alert("Log", f"Log-Datei:\n{log_path}")
+
+    # -- Fehler-E-Mail -------------------------------------------------------
+
+    def _error_email_menu(self) -> rumps.MenuItem:
+        """Untermenü: Fehler-Benachrichtigung per E-Mail (über lokales Relay)."""
+        parent = rumps.MenuItem("Fehler-E-Mail …")
+        toggle = rumps.MenuItem("Aktiv", callback=self._toggle_error_email)
+        toggle.state = 1 if self.settings.error_email_enabled else 0
+        parent.add(toggle)
+        parent.add(rumps.MenuItem("Empfänger…", callback=self._set_error_email_to))
+        parent.add(rumps.MenuItem("Test-E-Mail senden", callback=self._send_test_email))
+        info = rumps.MenuItem(f"An: {self.settings.error_email_to or '—'}  ·  "
+                              f"Relay: {self.settings.smtp_host}:{self.settings.smtp_port}")
+        info.set_callback(None)
+        parent.add(info)
+        return parent
+
+    def _toggle_error_email(self, sender) -> None:
+        if not self.settings.error_email_enabled and not self.settings.error_email_to:
+            rumps.alert("Empfänger fehlt", "Bitte zuerst einen Empfänger unter 'Empfänger…' setzen.")
+            return
+        self.settings.error_email_enabled = not self.settings.error_email_enabled
+        save_settings(self.settings)
+        sender.state = 1 if self.settings.error_email_enabled else 0
+        self._rebuild_menu()
+
+    def _set_error_email_to(self, _sender=None) -> None:
+        val = self._ask_text("E-Mail-Adresse für Fehlermeldungen (leer = aus):",
+                             "Fehler-E-Mail", default=self.settings.error_email_to)
+        if val is None:
+            return
+        self.settings.error_email_to = val
+        if not val:
+            self.settings.error_email_enabled = False
+        elif not self.settings.error_email_enabled:
+            self.settings.error_email_enabled = True  # Adresse gesetzt -> direkt aktiv
+        save_settings(self.settings)
+        self._rebuild_menu()
+        notify.notify("iCloud Sync", f"Fehler-E-Mail: {'an ' + val if val else 'deaktiviert'}.")
+
+    def _send_test_email(self, _sender=None) -> None:
+        to = self.settings.error_email_to
+        if not to:
+            rumps.alert("Empfänger fehlt", "Bitte zuerst einen Empfänger unter 'Empfänger…' setzen.")
+            return
+        sender = self.settings.error_email_from or to
+
+        def _run():
+            ok = notify.send_mail(self.settings.smtp_host, int(self.settings.smtp_port), sender, to,
+                                  "iCloud Sync: Test-E-Mail",
+                                  "Test der Fehler-Benachrichtigung über das lokale Mail-Relay.\n"
+                                  "Wenn diese Mail ankommt, funktioniert die Zustellung.")
+            notify.notify("iCloud Sync",
+                          "Test-E-Mail eingeliefert." if ok else
+                          f"Test-E-Mail fehlgeschlagen ({self.settings.smtp_host}:{self.settings.smtp_port}) – läuft das Relay?")
+
+        self._spawn(_run)
 
     # -- Einstellungen -------------------------------------------------------
 
