@@ -208,8 +208,8 @@ gleichem Fehler). Versand über `notify.send_mail` per **einfachem SMTP** an ein
 (Default `127.0.0.1:2525` → Projekt **MailRelay**, das Upstream-Auth/TLS/Retry übernimmt; kein
 Auth/TLS auf dem Loopback-Hop). Konfiguration in `Settings` (`error_email_enabled`,
 `error_email_to`, `error_email_from`, `smtp_host`, `smtp_port`) bzw. im Menü unter
-**„Fehler-E-Mail …"** (Aktiv-Toggle, Empfänger, Test-E-Mail). Adresse liegt in `settings.json`
-(App Support), nie im Repo.
+**„Fehler-E-Mail …"** (Aktiv-Toggle, Empfänger, Relay-Host, Relay-Port, Test-E-Mail). Adresse
+liegt in `settings.json` (App Support), nie im Repo.
 
 ## Bekannte Fallstricke (im Code berücksichtigt)
 

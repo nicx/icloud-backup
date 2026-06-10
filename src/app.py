@@ -392,6 +392,8 @@ class SyncApp(rumps.App):
         toggle.state = 1 if self.settings.error_email_enabled else 0
         parent.add(toggle)
         parent.add(rumps.MenuItem("Empfänger…", callback=self._set_error_email_to))
+        parent.add(rumps.MenuItem("Relay-Host…", callback=self._set_smtp_host))
+        parent.add(rumps.MenuItem("Relay-Port…", callback=self._set_smtp_port))
         parent.add(rumps.MenuItem("Test-E-Mail senden", callback=self._send_test_email))
         info = rumps.MenuItem(f"An: {self.settings.error_email_to or '—'}  ·  "
                               f"Relay: {self.settings.smtp_host}:{self.settings.smtp_port}")
@@ -421,6 +423,33 @@ class SyncApp(rumps.App):
         save_settings(self.settings)
         self._rebuild_menu()
         notify.notify("iCloud Sync", f"Fehler-E-Mail: {'an ' + val if val else 'deaktiviert'}.")
+
+    def _set_smtp_host(self, _sender=None) -> None:
+        val = self._ask_text("Mail-Relay Host/IP (z. B. 127.0.0.1):",
+                             "Fehler-E-Mail – Relay", default=self.settings.smtp_host)
+        if not val:
+            return
+        self.settings.smtp_host = val
+        save_settings(self.settings)
+        self._rebuild_menu()
+        notify.notify("iCloud Sync", f"Mail-Relay-Host: {val}")
+
+    def _set_smtp_port(self, _sender=None) -> None:
+        val = self._ask_text("Mail-Relay Port (z. B. 2525):",
+                             "Fehler-E-Mail – Relay", default=str(self.settings.smtp_port))
+        if val is None:
+            return
+        try:
+            port = int(val)
+            if not (1 <= port <= 65535):
+                raise ValueError
+        except ValueError:
+            rumps.alert("Ungültig", "Bitte einen Port zwischen 1 und 65535 eingeben.")
+            return
+        self.settings.smtp_port = port
+        save_settings(self.settings)
+        self._rebuild_menu()
+        notify.notify("iCloud Sync", f"Mail-Relay-Port: {port}")
 
     def _send_test_email(self, _sender=None) -> None:
         to = self.settings.error_email_to

@@ -92,7 +92,8 @@ Schlägt ein Dienst fehl, steht der **Grund im Klartext** im User-Untermenü
 („⚠️ Letzter Fehler: …") und in einer Notification (auch Drive/Photos-Fehler).
 
 **Fehler-E-Mail (optional):** Über das Menü **„Fehler-E-Mail …"** lässt sich eine
-Benachrichtigung per Mail aktivieren (Empfänger setzen, „Test-E-Mail senden" zum Prüfen).
+Benachrichtigung per Mail aktivieren (Empfänger sowie **Relay-Host/-Port** setzen,
+„Test-E-Mail senden" zum Prüfen).
 Bei `error`/`needs_reauth` geht dann eine Mail raus — **nur bei neuem/geändertem Problem**
 (kein Spam bei wiederholtem gleichem Fehler). Der Versand läuft per einfachem SMTP an ein
 **lokales Mail-Relay** (Default `127.0.0.1:2525`, z. B. das Projekt
