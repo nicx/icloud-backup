@@ -554,6 +554,32 @@ def test_mail_sets_mtime_from_internaldate():
     check(all("PEEK" in spec for spec in inst.fetch_specs), "mail mtime: BODY.PEEK[] erhalten (ungelesen)")
 
 
+def test_config_backup_restore():
+    """backup_config_to/restore_config_from kopiert settings+users (ohne Passwörter) hin und zurück."""
+    from src.config import backup
+    from src.config.settings import Settings, load_settings, save_settings
+    from src.config.users import User, UsersStore
+
+    save_settings(Settings(sync_interval_hours=7, error_email_to="ops@example.com"))
+    store = UsersStore()
+    store.add(User(apple_id="cfg@example.com", dest_base_path="/tmp/x"))
+
+    target = os.path.join(tempfile.mkdtemp(prefix="cfgbackup_"), "icloud-sync-config")
+    n = backup.backup_config_to(target)
+    check(n == 2, f"config: 2 Dateien gesichert (war {n})")
+    check(os.path.exists(os.path.join(target, "settings.json"))
+          and os.path.exists(os.path.join(target, "users.json")), "config: beide Dateien da")
+
+    # Aktuelle Config "verlieren", dann zurücksichern.
+    save_settings(Settings())  # Intervall zurück auf Default
+    restored = backup.restore_config_from(target)
+    check(restored == 2, f"config: 2 Dateien wiederhergestellt (war {restored})")
+    check(load_settings().sync_interval_hours == 7, "config: settings nach Restore wiederhergestellt")
+    check(UsersStore.loaded().get("cfg@example.com") is not None,
+          "config: user nach Restore wiederhergestellt")
+    save_settings(Settings())  # zurücksetzen
+
+
 if __name__ == "__main__":
     test_drive()
     test_photos()
@@ -568,6 +594,7 @@ if __name__ == "__main__":
     test_engine_clears_last_error_on_success()
     test_user_last_error_roundtrip()
     test_engine_emails_on_new_problem()
+    test_config_backup_restore()
     for m in PASS:
         print("  ok:", m)
     print(f"\nALL {len(PASS)} SYNC TESTS PASSED")

@@ -101,6 +101,14 @@ Bei `error`/`needs_reauth` geht dann eine Mail raus — **nur bei neuem/geänder
 App selbst kennt keine Mail-Zugangsdaten. Einstellungen (`error_email_to`, `smtp_host`,
 `smtp_port` …) liegen in `settings.json`.
 
+### Konfiguration sichern
+
+`settings.json` + `users.json` (beide **ohne Passwörter** — die liegen im Keychain) werden
+bei jedem Lauf automatisch nach `<dest>/_config-backup/` kopiert (von den UNAS-Snapshots
+versioniert). Zusätzlich im Menü **„Konfiguration …"** → „Exportieren…/Importieren…" für den
+Umzug auf einen neuen Mac. Session-Tokens werden bewusst **nicht** gesichert; nach einem
+Import sind die Passwörter ggf. neu zu setzen.
+
 ### Backup-Ablage auf dem Ziel-Volume
 
 ```

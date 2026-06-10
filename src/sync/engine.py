@@ -17,6 +17,7 @@ from typing import Optional
 
 from .. import notify
 from ..auth import keychain, session
+from ..config.backup import BACKUP_DIRNAME, backup_config_to
 from ..config.paths import logs_dir
 from ..config.settings import load_settings
 from ..config.users import _UNSET, User, UsersStore, UserStatus
@@ -86,6 +87,8 @@ def run_user(user: User, store: Optional[UsersStore] = None, progress_cb=None) -
         return _finalize(UserStatus.ERROR, msg, last_run=None)
 
     _check_free_space(user.dest_base_path)
+    # Config-Kopie aufs Ziel-Volume (ohne Passwörter) — UNAS-Snapshots versionieren sie.
+    backup_config_to(os.path.join(user.dest_base_path, BACKUP_DIRNAME))
 
     reasons: list[str] = []   # gesammelte Klartext-Fehlergründe (-> last_error)
     web_reauth = False

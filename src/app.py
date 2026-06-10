@@ -18,6 +18,7 @@ import sys
 import threading
 from datetime import datetime, timedelta, timezone
 from functools import partial
+from pathlib import Path
 from typing import Optional
 
 import rumps
@@ -110,6 +111,10 @@ class SyncApp(rumps.App):
         items.append(rumps.MenuItem("Alle jetzt synchronisieren", callback=self._sync_all))
         items.append(rumps.MenuItem("User hinzufügen…", callback=self._add_user))
         items.append(rumps.MenuItem("Log anzeigen…", callback=self._open_log))
+        cfg = rumps.MenuItem("Konfiguration …")
+        cfg.add(rumps.MenuItem("Exportieren…", callback=self._export_config))
+        cfg.add(rumps.MenuItem("Importieren…", callback=self._import_config))
+        items.append(cfg)
         items.append(self._error_email_menu())
         items.append(rumps.MenuItem("Einstellungen…", callback=self._open_settings))
         autostart_item = rumps.MenuItem("Beim Login starten", callback=self._toggle_autostart)
@@ -382,6 +387,46 @@ class SyncApp(rumps.App):
         except Exception:  # noqa: BLE001
             LOGGER.exception("Log konnte nicht im Finder angezeigt werden")
             rumps.alert("Log", f"Log-Datei:\n{log_path}")
+
+    # -- Konfiguration sichern/laden -----------------------------------------
+
+    def _export_config(self, _sender=None) -> None:
+        """Exportiert settings.json + users.json (ohne Passwörter) in einen gewählten Ordner."""
+        from .config.backup import backup_config_to
+
+        d = self._ask_directory("Ordner für den Konfigurations-Export wählen:")
+        if not d:
+            return
+        target = Path(d) / "icloud-sync-config"
+        n = backup_config_to(target)
+        if n:
+            notify.notify("iCloud Sync", f"Konfiguration exportiert ({n} Dateien) → {target}")
+        else:
+            rumps.alert("Export fehlgeschlagen",
+                        "Es konnten keine Konfigurationsdateien geschrieben werden.")
+
+    def _import_config(self, _sender=None) -> None:
+        """Importiert settings.json + users.json aus einem Ordner (überschreibt die aktuellen)."""
+        from .config.backup import restore_config_from
+
+        if not self._ask_yes_no(
+                "Konfiguration importieren? Aktuelle settings.json/users.json werden "
+                "überschrieben. Passwörter (Keychain) müssen ggf. neu gesetzt werden.",
+                "Konfiguration importieren"):
+            return
+        d = self._ask_directory("Ordner mit der gesicherten Konfiguration wählen:")
+        if not d:
+            return
+        n = restore_config_from(Path(d))
+        if not n:
+            rumps.alert("Import", "Im gewählten Ordner wurde keine settings.json/users.json gefunden.")
+            return
+        # Frisch laden und UI neu aufbauen.
+        self.settings = load_settings()
+        self.store = UsersStore.loaded()
+        self._reset_stale_running()
+        self._rebuild_menu()
+        notify.notify("iCloud Sync", f"Konfiguration importiert ({n} Dateien).")
 
     # -- Fehler-E-Mail -------------------------------------------------------
 

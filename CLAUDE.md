@@ -98,8 +98,9 @@ icloud-sync/
     autostart.py           # Login-Autostart via LaunchAgent (In-App-Toggle)
     config/
       users.py             # User-Modell + UsersStore (JSON-Persistenz, kein Passwort)
-      settings.py          # globale Settings (Sync-Intervall, autostart, notifications)
+      settings.py          # globale Settings (Sync-Intervall, autostart, notifications, Fehler-E-Mail)
       paths.py             # App-Support-Pfade, Pro-User-Cookie-Dir, Legacy-Migration
+      backup.py            # Config-Sicherung (settings.json+users.json, ohne Passwörter/Sessions)
     auth/
       session.py           # EINZIGE pyicloud-Stelle: Login, 2FA, Re-Auth, Cookie-Persistenz
       keychain.py          # Credential-Storage via keyring (Web-PW + Mail-App-PW)
@@ -210,6 +211,19 @@ Auth/TLS auf dem Loopback-Hop). Konfiguration in `Settings` (`error_email_enable
 `error_email_to`, `error_email_from`, `smtp_host`, `smtp_port`) bzw. im Menü unter
 **„Fehler-E-Mail …"** (Aktiv-Toggle, Empfänger, Relay-Host, Relay-Port, Test-E-Mail). Adresse
 liegt in `settings.json` (App Support), nie im Repo.
+
+## Config-Sicherung (`config/backup.py`)
+
+Gesichert werden nur `settings.json` + `users.json` — **ohne Geheimnisse**: Passwörter
+liegen im Keychain (nicht in diesen Dateien), Session-Tokens (`sessions/`) werden bewusst
+**nicht** mitgesichert (2FA-umgehend + per Re-Auth regenerierbar). Ein Import verlangt daher
+ggf. erneutes Setzen der Passwörter.
+
+- **Automatisch:** `engine.run_user` kopiert die Config nach jedem Mount-Check nach
+  `<dest>/_config-backup/` (`backup_config_to`) — die UNAS-Snapshots versionieren sie. Der
+  Ordner liegt außerhalb von `Drive/`/`Photos/`/`Mail/` und ist damit vom Prune unberührt.
+- **Manuell:** Menü **„Konfiguration …"** → „Exportieren…"/„Importieren…" (NSOpenPanel).
+  Import lädt Settings/Users neu und baut das Menü auf.
 
 ## Bekannte Fallstricke (im Code berücksichtigt)
 
