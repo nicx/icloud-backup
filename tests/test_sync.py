@@ -450,6 +450,16 @@ def test_user_last_error_roundtrip():
           "user: fehlendes last_error -> None")
 
 
+def test_settings_auto_sync_paused_roundtrip():
+    """auto_sync_paused überlebt save/load; alte settings.json ohne Feld -> False."""
+    from src.config.settings import Settings, load_settings, save_settings
+
+    save_settings(Settings(auto_sync_paused=True))
+    check(load_settings().auto_sync_paused is True, "settings: auto_sync_paused=True persistiert")
+    check(Settings().auto_sync_paused is False, "settings: Default ist False")
+    save_settings(Settings())  # zurücksetzen
+
+
 def test_engine_emails_on_new_problem():
     """Fehler-Mail nur bei aktiviertem Setting UND neuem/geändertem Problem (kein Spam)."""
     from src import notify
@@ -593,6 +603,7 @@ if __name__ == "__main__":
     test_engine_records_last_error()
     test_engine_clears_last_error_on_success()
     test_user_last_error_roundtrip()
+    test_settings_auto_sync_paused_roundtrip()
     test_engine_emails_on_new_problem()
     test_config_backup_restore()
     for m in PASS:

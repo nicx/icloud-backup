@@ -24,25 +24,38 @@ _PX = _POINTS * _SCALE  # 44 px
 
 
 def ensure_menubar_icon() -> Optional[str]:
-    """Rendert (falls nötig) das Template-PNG und gibt den Pfad zurück, sonst ``None``."""
-    dest = app_support_dir() / "menubar_template.png"
-    try:
-        _render(dest)  # immer neu rendern -> kein veralteter Cache (Icon ist winzig/günstig)
-        return str(dest)
-    except Exception as exc:  # noqa: BLE001 - ohne Icon fällt die App auf Textglyph zurück
-        LOGGER.warning("Menüleisten-Icon konnte nicht erzeugt werden: %s", exc)
-        return None
+    """Abwärtskompatibel: Pfad des gefüllten (aktiven) Icons, sonst ``None``."""
+    return ensure_menubar_icons().get("active")
 
 
-def _render(dest: Path) -> None:
-    """Bevorzugt Apples SF-Symbol „icloud" (sieht aus wie System-Icons); sonst gezeichnete Wolke."""
-    import AppKit
+def ensure_menubar_icons() -> dict:
+    """Rendert beide Template-PNGs und gibt ``{"active": path|None, "idle": path|None}`` zurück.
 
-    symbol = _sf_symbol_image("icloud")
+    ``active`` = gefüllte Wolke (`icloud.fill`, Auto-Sync läuft), ``idle`` = umrandete Wolke
+    (`icloud`, Auto-Sync pausiert). Fehlschlag je Variante ⇒ ``None`` (App fällt auf Textglyph
+    zurück).
+    """
+    out: dict = {"active": None, "idle": None}
+    for key, symbol, filled, fname in (
+        ("active", "icloud.fill", True, "menubar_template_active.png"),
+        ("idle", "icloud", False, "menubar_template_idle.png"),
+    ):
+        dest = app_support_dir() / fname
+        try:
+            _render(dest, symbol, filled)
+            out[key] = str(dest)
+        except Exception as exc:  # noqa: BLE001 - ohne Icon fällt die App auf Textglyph zurück
+            LOGGER.warning("Menüleisten-Icon (%s) konnte nicht erzeugt werden: %s", key, exc)
+    return out
+
+
+def _render(dest: Path, symbol_name: str, filled: bool) -> None:
+    """Bevorzugt das passende SF-Symbol; sonst gezeichnete Wolke (gefüllt oder umrandet)."""
+    symbol = _sf_symbol_image(symbol_name)
     if symbol is not None:
         _write_png(_bitmap_from_image(symbol), dest)
         return
-    _write_png(_draw_cloud_rep(), dest)
+    _write_png(_draw_cloud_rep(filled), dest)
 
 
 def _sf_symbol_image(name: str):
@@ -92,8 +105,12 @@ def _bitmap_from_image(img):
     return rep
 
 
-def _draw_cloud_rep():
-    """Fallback: gezeichnete Wolken-Silhouette (flache Basis + drei Bögen)."""
+def _draw_cloud_rep(filled: bool = True):
+    """Fallback: gezeichnete Wolken-Silhouette (flache Basis + drei Bögen).
+
+    ``filled=False`` zeichnet eine Kontur (Näherung; eine saubere Outline liefert v. a. das
+    SF-Symbol auf macOS 11+, das im Normalfall greift).
+    """
     import AppKit
     from Foundation import NSMakeRect, NSSize
 
@@ -104,7 +121,7 @@ def _draw_cloud_rep():
     ctx = AppKit.NSGraphicsContext.graphicsContextWithBitmapImageRep_(rep)
     AppKit.NSGraphicsContext.saveGraphicsState()
     AppKit.NSGraphicsContext.setCurrentContext_(ctx)
-    AppKit.NSColor.blackColor().setFill()
+    AppKit.NSColor.blackColor().set()
     u = _PX / 44.0
     cloud = AppKit.NSBezierPath.bezierPath()
 
@@ -118,7 +135,11 @@ def _draw_cloud_rep():
     add_oval(23, 28, 10.0)
     add_oval(31, 24, 8.0)
     cloud.setWindingRule_(AppKit.NSWindingRuleNonZero)
-    cloud.fill()
+    if filled:
+        cloud.fill()
+    else:
+        cloud.setLineWidth_(2.0 * u)
+        cloud.stroke()
     AppKit.NSGraphicsContext.restoreGraphicsState()
     return rep
 

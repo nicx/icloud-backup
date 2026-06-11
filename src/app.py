@@ -109,6 +109,8 @@ class SyncApp(rumps.App):
         if items:
             items.append(rumps.separator)
         items.append(rumps.MenuItem("Alle jetzt synchronisieren", callback=self._sync_all))
+        pause_label = "Auto-Sync fortsetzen" if self.settings.auto_sync_paused else "Auto-Sync pausieren"
+        items.append(rumps.MenuItem(pause_label, callback=self._toggle_auto_sync))
         items.append(rumps.MenuItem("User hinzufügen…", callback=self._add_user))
         items.append(rumps.MenuItem("Log anzeigen…", callback=self._open_log))
         cfg = rumps.MenuItem("Konfiguration …")
@@ -152,24 +154,29 @@ class SyncApp(rumps.App):
 
     def _setup_menubar_icon(self) -> None:
         """Setzt ein echtes Template-Image als Menüleisten-Icon (statt Textglyph)."""
-        path = menubar_icon.ensure_menubar_icon()
-        self._has_icon = bool(path)
-        if path:
+        icons = menubar_icon.ensure_menubar_icons()
+        self._icon_active = icons.get("active")
+        self._icon_idle = icons.get("idle")
+        self._has_icon = bool(self._icon_active and self._icon_idle)
+        self._current_icon: Optional[str] = None
+        if self._has_icon:
             self.template = True  # System tönt hell/dunkel und skaliert auf Menüleistenhöhe
-            self.icon = path
-            self.title = ""
-        else:
-            self.title = ICON_OK
+        self._update_icon()
 
     def _update_icon(self) -> None:
         attention = any(
             u.status in (UserStatus.NEEDS_REAUTH, UserStatus.ERROR) for u in self.store.list()
         )
         if self._has_icon:
-            # Icon bleibt; Aufmerksamkeit als kleines Badge daneben.
+            # Gefüllt = Auto-Sync aktiv, umrandet = pausiert; Aufmerksamkeit als Badge daneben.
+            desired = self._icon_idle if self.settings.auto_sync_paused else self._icon_active
+            if desired != self._current_icon:
+                self.icon = desired
+                self._current_icon = desired
             self.title = " 🔴" if attention else ""
         else:
-            self.title = ICON_ATTENTION if attention else ICON_OK
+            base = ICON_ATTENTION if attention else ICON_OK
+            self.title = (base + " ⏸") if self.settings.auto_sync_paused else base
 
     @staticmethod
     def _fmt_last_run(iso: Optional[str]) -> str:
@@ -533,6 +540,18 @@ class SyncApp(rumps.App):
     def _quit(self, _sender) -> None:
         rumps.quit_application()
 
+    # -- Auto-Sync pausieren/fortsetzen --------------------------------------
+
+    def _toggle_auto_sync(self, _sender=None) -> None:
+        """Schaltet den Auto-Sync (Scheduler) an/aus; Icon + Menü spiegeln den Zustand."""
+        self.settings.auto_sync_paused = not self.settings.auto_sync_paused
+        save_settings(self.settings)
+        self._update_icon()
+        self._rebuild_menu()
+        notify.notify("iCloud Sync",
+                      "Auto-Sync pausiert (manueller Sync bleibt möglich)."
+                      if self.settings.auto_sync_paused else "Auto-Sync fortgesetzt.")
+
     # -- Autostart -----------------------------------------------------------
 
     def _toggle_autostart(self, sender) -> None:
@@ -649,7 +668,10 @@ class SyncApp(rumps.App):
 
         Deckt Missed-Run-Catch-up ab: war der Mac im Sleep, ist last_run alt -> sofort fällig.
         Re-Auth-/Fehler-User werden nicht automatisch gesynct (brauchen User-Eingriff).
+        Bei pausiertem Auto-Sync ist niemand fällig (manueller „Sync jetzt" bleibt möglich).
         """
+        if self.settings.auto_sync_paused:
+            return False
         if user.status in (UserStatus.NEEDS_REAUTH, UserStatus.RUNNING):
             return False
         if not user.last_run:

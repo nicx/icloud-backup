@@ -65,6 +65,13 @@ Nachrichten werden mit `BODY.PEEK[]` geladen und bleiben dadurch **ungelesen**. 
 vollständige Datum steckt ohnehin im `Date:`-Header jeder `.eml`). Der Mail-Sync läuft **unabhängig**
 von der Drive/Photos-Web-Session (auch wenn die gerade ein Re-Auth braucht).
 
+### Status am Menüleisten-Icon
+
+Das Icon zeigt auf einen Blick, ob der Auto-Sync läuft: **gefüllte Wolke** = Auto-Sync aktiv,
+**umrandete Wolke** = pausiert. Über das Menü **„Auto-Sync pausieren/fortsetzen"** lässt er sich
+anhalten — geplante Läufe unterbleiben dann, **„Sync jetzt" bleibt aber manuell möglich**. Ein
+**rotes Badge** signalisiert zusätzlich `error`/`needs_reauth`, ein Spinner einen laufenden Sync.
+
 ### Re-Auth
 
 Apple-Sessions laufen periodisch ab (~2 Monate). Erkennt die App das, setzt sie den User-Status auf

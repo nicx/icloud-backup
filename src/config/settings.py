@@ -22,6 +22,7 @@ class Settings:
     :param sync_interval_hours: Mindestabstand zwischen zwei Sync-Läufen je User.
     :param autostart: Beim Login automatisch starten (Verdrahtung folgt späterer Durchgang).
     :param notifications: macOS-Notifications aktiviert.
+    :param auto_sync_paused: Auto-Sync pausiert (Scheduler stößt keine Läufe an; Icon umrandet).
     :param error_email_enabled: bei Fehler/Re-Auth eine E-Mail verschicken (über lokales Relay).
     :param error_email_to: Empfänger der Fehler-Mails (leer = aus).
     :param error_email_from: Absender; leer ⇒ es wird ``error_email_to`` genutzt.
@@ -31,6 +32,7 @@ class Settings:
     sync_interval_hours: int = DEFAULT_SYNC_INTERVAL_HOURS
     autostart: bool = False
     notifications: bool = True
+    auto_sync_paused: bool = False  # True ⇒ Scheduler stößt keine Läufe an (Icon umrandet)
     error_email_enabled: bool = False
     error_email_to: str = ""
     error_email_from: str = ""

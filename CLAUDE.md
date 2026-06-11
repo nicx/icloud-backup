@@ -76,7 +76,12 @@ Trennung im Code, NICHT in separate Prozesse:
   sync_interval_hours` (Default 4 h) — war der Mac im Sleep, ist `last_run` alt und der
   User sofort fällig. `needs_reauth`- und `running`-User werden vom Auto-Sync
   ausgenommen (`_is_due`); `error`-User werden beim nächsten Fälligkeitsfenster
-  hingegen wieder mitgenommen (automatischer Retry).
+  hingegen wieder mitgenommen (automatischer Retry). **Auto-Sync pausierbar**
+  (`settings.auto_sync_paused`, Menü „Auto-Sync pausieren/fortsetzen") — dann ist niemand
+  fällig; „Sync jetzt" bleibt manuell möglich.
+- **Menüleisten-Icon als Statusanzeige** (`menubar_icon.py`, zwei Template-Varianten):
+  **gefüllt** (`icloud.fill`) = Auto-Sync aktiv, **umrandet** (`icloud`) = pausiert; rotes
+  Badge bei `error`/`needs_reauth`, Spinner im Titel während eines Laufs (`_update_icon`).
 - **Sync-Engine** (`src/sync/engine.py`): orchestriert pro User Mount-Check →
   Drive/Photos (Web) → Mail (IMAP). Eigenständig ohne UI aufrufbar (Tests/Debug). Ein
   Fehler bei einem User/Dienst stoppt die anderen nicht. **Mail läuft unabhängig von der
@@ -94,7 +99,7 @@ icloud-sync/
   src/
     app.py                 # rumps-Entrypoint, Menüleiste, Scheduler, Live-Fortschritt
     notify.py              # macOS-Notifications (rumps / pync-Fallback)
-    menubar_icon.py        # erzeugt/lädt das Template-Image fürs Menüleisten-Icon
+    menubar_icon.py        # Template-Icons (gefüllt=aktiv / umrandet=pausiert) fürs Menüleisten-Icon
     autostart.py           # Login-Autostart via LaunchAgent (In-App-Toggle)
     config/
       users.py             # User-Modell + UsersStore (JSON-Persistenz, kein Passwort)
