@@ -149,6 +149,10 @@ codesign --force --deep --sign - "dist/iCloud Sync.app"
 Das Bundle ist eine reine **Menüleisten-App** (`LSUIElement` → kein Dock-Icon), Bundle-ID
 `de.nicx.icloud-sync`. Es ist **ad-hoc signiert** (kein Apple-Developer-Zertifikat).
 
+> `pyicloud` ist bewusst auf eine feste Version gepinnt; ein Upgrade nur gezielt durchführen
+> und danach einen echten Account-Smoke-Test machen (die Tests sind mock-basiert) — Details
+> unter „pyicloud aktualisieren" in `CLAUDE.md`.
+
 ### Gatekeeper / Quarantäne
 
 Ein ad-hoc/unsigniertes Bundle wird beim ersten Start von Gatekeeper blockiert. Für den

@@ -235,9 +235,28 @@ ggf. erneutes Setzen der Passwörter.
 5. **UNAS-Mount fehlt** – `engine.is_mount_available` prüft vor dem Sync; sonst sauberer
    Abbruch + Notification, kein Crash.
 6. **Freier Speicher** – `engine._check_free_space` warnt (< 2 GiB), bricht aber nicht ab.
-7. **pyicloud-API-Drift** – allein in `auth/session.py` gekapselt.
+7. **pyicloud-API-Drift** – der *Import* ist auf `auth/session.py` beschränkt (Auth/2FA/
+   Exceptions). **Aber:** `sync/drive.py` und `sync/photos.py` hängen an pyicloud-Objekt-Shapes
+   (`node.get_children/type/size/date_modified/open`, `api.photos.all`,
+   `asset.versions/download_url/download`, `api.session.get`) — ein Upgrade kann Drive/Photos
+   also brechen, obwohl sie pyicloud nicht importieren. Die mock-basierten Tests fangen das
+   **nicht**. Siehe „pyicloud aktualisieren".
 8. **Spiegel-Löschen** – `prune_extra` nur bei vollständigem, fehlerfreiem Listing
    (Guards in jedem Sync-Modul). Niemals löschen bei Teil-/Fehlerlauf.
+
+## pyicloud aktualisieren
+
+`pyicloud` ist auf `==2.6.4` gepinnt (`requirements.txt`) — von allein passiert **nichts**;
+`pip install` und der `.app`-Build ziehen weiterhin exakt diese Version. Ein Upgrade ist daher
+eine **bewusste** Aktion und nicht durch die mock-basierten Tests abgesichert. Vorgehen:
+
+1. Pin in `requirements.txt`/`requirements-build.txt` erhöhen, `.venv/bin/pip install -r requirements-build.txt`.
+2. `.app` neu bauen (`bash build/build.sh`) und auf **Import-/Bundle-Fehler** achten — ein
+   Update kann transitive Deps ändern (vgl. den `charset_normalizer`-mypyc-`.so`-Sonderfall in
+   `build/setup.py`; ggf. `packages`-Liste anpassen).
+3. **Echter Smoke-Test gegen einen Account** (nicht nur Mocks): Login + 2FA, ein Drive-File, ein
+   Photo. Bei Fehlern zuerst `auth/session.py` (Auth/Exceptions), dann `sync/drive.py` /
+   `sync/photos.py` (Objekt-Shapes, Fallstrick #7) auf `AttributeError`/geänderte Namen prüfen.
 
 ## TCC / Berechtigungen
 
