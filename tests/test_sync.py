@@ -118,15 +118,38 @@ class _IterFail:
             yield it
 
 
-class FakePhotosLib:
-    def __init__(self, assets):
+class FakePhotoLibraryZone:
+    """Eine CloudKit-Bibliothek mit Scope + All-Album (für api.photos.libraries)."""
+    def __init__(self, assets, scope):
         self.all = assets
+        self.scope = scope
+
+
+class FakePhotosLib:
+    def __init__(self, assets, shared_assets=None, libraries_error=False):
+        self.all = assets
+        self._shared_assets = shared_assets   # None = keine geteilte Mediathek vorhanden
+        self._libraries_error = libraries_error
+
+    @property
+    def libraries(self):
+        if self._libraries_error:
+            raise RuntimeError("libraries boom")
+        libs = {
+            "root": FakePhotoLibraryZone(self.all, "private"),
+            "shared": FakePhotoLibraryZone([], "shared-stream"),  # Legacy-Shared-Streams: ignorieren
+        }
+        if self._shared_assets is not None:
+            libs["shared:SharedSync-x"] = FakePhotoLibraryZone(self._shared_assets, "shared-library")
+        return libs
 
 
 class FakeApi:
-    def __init__(self, *, drive_service=None, photos_assets=None, url_map=None):
+    def __init__(self, *, drive_service=None, photos_assets=None, url_map=None,
+                 shared_assets=None, libraries_error=False):
         self.drive = drive_service
-        self.photos = FakePhotosLib(photos_assets if photos_assets is not None else [])
+        self.photos = FakePhotosLib(photos_assets if photos_assets is not None else [],
+                                    shared_assets=shared_assets, libraries_error=libraries_error)
         self.session = FakeSession(url_map or {})
 
 
@@ -296,6 +319,64 @@ def test_photos():
     check(s5.deleted == 0, "photos Guard: Iterationsfehler -> kein Löschen")
 
 
+# --- Photos: geteilte Mediathek --------------------------------------------
+
+def test_photos_shared_library():
+    """include_shared trennt private (Photos/) und geteilte (SharedPhotos/) Mediathek sauber."""
+    dest = tempfile.mkdtemp(prefix="sharedphotos_")
+    p = FakePhotoAsset("PRIV1", "PRIV.JPG", content=b"priv")
+    s1 = FakePhotoAsset("SH1", "A.JPG", content=b"sh1")
+    s2 = FakePhotoAsset("SH2", "B.JPG", content=b"sh2")
+    url_map = {}
+    for asset in (p, s1, s2):
+        url_map.update(asset._content)
+    priv_dir = os.path.join(dest, "Photos", "2023", "07")
+    shared_dir = os.path.join(dest, "SharedPhotos", "2023", "07")
+
+    # include_shared=False -> nur Photos/, kein SharedPhotos/
+    api = FakeApi(photos_assets=[p], url_map=url_map, shared_assets=[s1, s2])
+    photos.sync_photos(api, dest, "x@example.com", include_shared=False)
+    check(len([f for f in listdir(priv_dir) if f.endswith(".JPG")]) == 1, "shared aus: privat geladen")
+    check(not os.path.isdir(os.path.join(dest, "SharedPhotos")), "shared aus: kein SharedPhotos/")
+
+    # include_shared=True -> beide Ablagen gefüllt
+    api2 = FakeApi(photos_assets=[p], url_map=url_map, shared_assets=[s1, s2])
+    photos.sync_photos(api2, dest, "x@example.com", include_shared=True)
+    check(len([f for f in listdir(priv_dir) if f.endswith(".JPG")]) == 1, "shared an: privat unverändert")
+    check(len([f for f in listdir(shared_dir) if f.endswith(".JPG")]) == 2, "shared an: 2 geteilte Dateien")
+
+    # Getrennter Prune: ein geteiltes Asset entfernt -> nur SharedPhotos betroffen, Photos bleibt
+    api3 = FakeApi(photos_assets=[p], url_map=url_map, shared_assets=[s1])
+    s3 = photos.sync_photos(api3, dest, "x@example.com", include_shared=True)
+    check(s3.deleted == 1, f"shared Prune: 1 gelöscht (war {s3.deleted})")
+    check(len([f for f in listdir(shared_dir) if f.endswith(".JPG")]) == 1, "shared Prune: noch 1 geteilt")
+    check(len([f for f in listdir(priv_dir) if f.endswith(".JPG")]) == 1, "shared Prune: privat unberührt")
+
+
+def test_photos_shared_resilience():
+    """Fehler/Leere bei der geteilten Mediathek dürfen weder den privaten Sync kippen noch löschen."""
+    dest = tempfile.mkdtemp(prefix="sharedres_")
+    p = FakePhotoAsset("PR1", "P.JPG", content=b"p")
+    url_map = dict(p._content)
+    priv_dir = os.path.join(dest, "Photos", "2023", "07")
+
+    # libraries-Zugriff wirft -> privat trotzdem ok
+    api = FakeApi(photos_assets=[p], url_map=url_map, libraries_error=True)
+    photos.sync_photos(api, dest, "x@example.com", include_shared=True)
+    check(len(listdir(priv_dir)) == 1, "shared-Fehler: privat dennoch geladen")
+    check(not os.path.isdir(os.path.join(dest, "SharedPhotos")), "shared-Fehler: kein SharedPhotos/")
+
+    # leere geteilte Mediathek -> kein Prune (stray-Datei in SharedPhotos bleibt)
+    shared_dir = os.path.join(dest, "SharedPhotos")
+    os.makedirs(shared_dir, exist_ok=True)
+    stray = os.path.join(shared_dir, "stray.bin")
+    with open(stray, "wb") as fh:
+        fh.write(b"x")
+    api2 = FakeApi(photos_assets=[p], url_map=url_map, shared_assets=[])
+    s = photos.sync_photos(api2, dest, "x@example.com", include_shared=True)
+    check(s.deleted == 0 and os.path.exists(stray), "shared leer -> kein Löschen (Guard)")
+
+
 # --- Mail -------------------------------------------------------------------
 
 def test_mail():
@@ -453,6 +534,11 @@ def test_user_last_error_roundtrip():
     check(User.from_dict(d).last_error == "kaputt", "user: last_error aus from_dict")
     check(User.from_dict({"apple_id": "old@example.com"}).last_error is None,
           "user: fehlendes last_error -> None")
+    # sync_shared_photos: Roundtrip + Default + alte JSON
+    check(User.from_dict(User(apple_id="s@x", sync_shared_photos=True).to_dict()).sync_shared_photos is True,
+          "user: sync_shared_photos Roundtrip")
+    check(User.from_dict({"apple_id": "old@example.com"}).sync_shared_photos is False,
+          "user: sync_shared_photos Default False (alte JSON)")
 
 
 def test_settings_auto_sync_paused_roundtrip():
@@ -629,6 +715,8 @@ def test_config_backup_restore():
 if __name__ == "__main__":
     test_drive()
     test_photos()
+    test_photos_shared_library()
+    test_photos_shared_resilience()
     test_mail()
     test_mail_uid_traversal_blocked()
     test_mail_sets_mtime_from_internaldate()

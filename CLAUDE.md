@@ -136,6 +136,9 @@ Pro User (`User`-Dataclass, persistiert als `users.json` in App Support):
 - `apple_id` (E-Mail) — eindeutiger Schlüssel
 - `sync_drive`, `sync_photos` (Default an), `sync_mail` (Default **aus** — braucht
   app-spezifisches Passwort)
+- `sync_shared_photos` (Default **aus**): zusätzlich die **geteilte Mediathek** nach
+  `SharedPhotos/` sichern (Add-on zu `sync_photos`). Pro geteilter Bibliothek sollte nur **ein**
+  Account das aktivieren (Paare teilen sich dieselbe → sonst doppelt). Toggle im User-Untermenü.
 - `dest_base_path` — Ziel-Basispfad auf dem (gemounteten) Volume; darunter legt die
   Engine `Drive/`, `Photos/`, `Mail/` an
 - `status`: `idle` / `running` / `ok` / `needs_reauth` / `error`
@@ -165,11 +168,21 @@ Zieldatei existiert / stimmt in Größe+mtime. Spiegeln = Überzähliges (geguar
 (fehlt / Größe ≠ / mtime weicht > 2 s ab). 0-Byte-Dateien werden als leere Datei
 angelegt (iCloud liefert sonst 400). Resumebar via `.part` + atomarem Rename.
 
-**Photos** (`sync/photos.py`): `api.photos.all` (intern paginiert) iterieren.
-Zielpfad `Photos/<YYYY>/<MM>/<kurz-id>_<name>`. **Namens-Kollisionen** über eine kurze,
-stabile SHA1-Asset-ID als Präfix gelöst. **Live Photos**: Original (`original`) **und**
-Video (`original_video`) werden beide gesichert. Originale, nicht optimierte Versionen.
-Streaming über die authentifizierte Session.
+**Photos** (`sync/photos.py`): `api.photos.all` (intern paginiert) iterieren = **private**
+Mediathek (CloudKit-Zone `PRIMARY_ZONE`, `scope="private"`). Zielpfad
+`Photos/<YYYY>/<MM>/<kurz-id>_<name>`. **Namens-Kollisionen** über eine kurze, stabile
+SHA1-Asset-ID als Präfix gelöst. **Live Photos**: Original (`original`) **und** Video
+(`original_video`) werden beide gesichert. Originale, nicht optimierte Versionen. Streaming über
+die authentifizierte Session. Refaktoriert auf `_sync_into(dest_dir, album_sources, …)` mit
+eigenem `expected`-Set + Prune-Scope je Ablage.
+**Geteilte Mediathek** (optional, `user.sync_shared_photos`): die iCloud Shared Photo Library
+liegt in **separaten** Zonen (`SharedSync-…`, `scope="shared-library"`) und ist **nicht** in
+`api.photos.all` — sie kommt über `api.photos.libraries` (`_shared_album_sources`, best-effort
+gekapselt) und wird nach `SharedPhotos/` gespiegelt (getrennter Prune; leere/fehlende Shared-Lib
+⇒ kein Löschen). **Wichtig** (Move-in-Shared): verschiebt man ein Foto von „Persönlich" nach
+„Gemeinsam", verlässt es die private Zone → ohne aktiviertes `sync_shared_photos` würde der
+`Photos/`-Spiegel es lokal löschen; mit aktivierter geteilter Sicherung landet es stattdessen in
+`SharedPhotos/`.
 
 **Mail** (`sync/mail.py`): alle Ordner via IMAP `LIST` (modified-UTF-7-Namen dekodiert),
 je Ordner `Mail/<Ordner>/<uid>.eml` (rohes RFC822 inkl. Anhänge). **Ungelesen-schonend:**

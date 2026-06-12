@@ -57,55 +57,103 @@ def _emit(stats: PhotoStats, seen: int, progress_cb) -> None:
                      "deleted": stats.deleted, "errors": stats.errors, "seen": seen})
 
 
-def sync_photos(api, dest_base_path: str, apple_id: str, progress_cb=None) -> PhotoStats:
+def sync_photos(api, dest_base_path: str, apple_id: str, progress_cb=None,
+                include_shared: bool = False) -> PhotoStats:
     """Spiegelt iCloud Photos nach ``dest_base_path/Photos`` (dateibasiert).
 
     :param api: authentifizierte ``PyiCloudService``-Instanz.
     :param progress_cb: optionaler Callback ``cb(counts: dict)`` für Live-Fortschritt.
+    :param include_shared: zusätzlich die geteilte Mediathek nach ``SharedPhotos/`` sichern
+        (eigener Prune-Scope, getrennt von ``Photos/``).
     :returns: :class:`PhotoStats` mit Zählern für das Logging.
     """
     stats = PhotoStats()
-    photos_dest = Path(dest_base_path) / "Photos"
+    base = Path(dest_base_path)
+
+    # 1) Persönliche/private Mediathek -> Photos/
+    _sync_into(api, base / "Photos", [lambda: api.photos.all], apple_id, stats, progress_cb, "Photos")
+
+    # 2) Geteilte Mediathek (optional) -> SharedPhotos/ (eigener Prune-Scope)
+    if include_shared:
+        sources = _shared_album_sources(api, apple_id)
+        if sources:
+            _sync_into(api, base / "SharedPhotos", sources, apple_id, stats, progress_cb, "SharedPhotos")
+        else:
+            LOGGER.info("[%s] Keine geteilte Mediathek gefunden (oder nicht lesbar).", apple_id)
+
+    LOGGER.info("[%s] %s", apple_id, stats.summary())
+    return stats
+
+
+def _shared_album_sources(api, apple_id: str) -> list:
+    """Callables, die je geteilte Mediathek (``scope == 'shared-library'``) das All-Album liefern.
+
+    Best-effort: jeder Zugriff ist gekapselt (pyicloud-Drift/Netz), Fehler ⇒ leere Liste, damit
+    der private Sync nie kippt. Leere Liste führt beim Aufrufer zu **keinem** Prune (kein Wipe).
+    """
+    sources: list = []
+    try:
+        libraries = api.photos.libraries
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("[%s] Geteilte Mediatheken nicht abrufbar: %s", apple_id, exc)
+        return sources
+    try:
+        items = list(libraries.items()) if hasattr(libraries, "items") else list(libraries)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("[%s] Bibliotheksliste nicht lesbar: %s", apple_id, exc)
+        return sources
+    for entry in items:
+        lib = entry[1] if isinstance(entry, tuple) else entry
+        if getattr(lib, "scope", None) == "shared-library":
+            sources.append(lambda lib=lib: lib.all)
+    return sources
+
+
+def _sync_into(api, photos_dest: Path, album_sources: list, apple_id: str, stats: PhotoStats,
+               progress_cb, label: str) -> None:
+    """Spiegelt ein oder mehrere Alben in **eine** Ablage (eigener expected-Set + Prune-Scope).
+
+    Mehrere Quellen (z. B. mehrere geteilte Zonen) werden zusammengeführt; Dedup über die
+    Asset-ID. Prune nur bei vollständiger Iteration ALLER Quellen UND nicht-leerem Ergebnis.
+    """
     expected: set = set()
     complete = True
-    _emit(stats, 0, progress_cb)
-
-    try:
-        album = api.photos.all
-        iterator = iter(album)
-    except Exception as exc:  # noqa: BLE001
-        LOGGER.error("Photos-Bibliothek nicht lesbar für %s: %s", apple_id, exc)
-        stats.errors += 1
-        return stats  # nicht lesbar -> niemals löschen
-
     seen = 0
-    while True:
+    _emit(stats, seen, progress_cb)
+
+    for source in album_sources:
         try:
-            asset = next(iterator)
-        except StopIteration:
-            break
+            iterator = iter(source())
         except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("Asset-Iteration unterbrochen: %s", exc)
+            LOGGER.error("[%s] %s-Bibliothek nicht lesbar: %s", apple_id, label, exc)
             stats.errors += 1
-            complete = False  # unvollständig -> kein Pruning
-            break
-        seen += 1
-        if seen % _PROGRESS_EVERY == 0:
-            LOGGER.info("[%s] Photos-Fortschritt: %d gesichtet, %d geladen",
-                        apple_id, seen, stats.downloaded)
-        _sync_asset(api, asset, photos_dest, stats, expected)
-        _emit(stats, seen, progress_cb)
+            complete = False  # Quelle unlesbar -> kein Pruning (Inhalt unbekannt)
+            continue
+        while True:
+            try:
+                asset = next(iterator)
+            except StopIteration:
+                break
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("[%s] %s-Iteration unterbrochen: %s", apple_id, label, exc)
+                stats.errors += 1
+                complete = False  # unvollständig -> kein Pruning
+                break
+            seen += 1
+            if seen % _PROGRESS_EVERY == 0:
+                LOGGER.info("[%s] %s-Fortschritt: %d gesichtet, %d geladen",
+                            apple_id, label, seen, stats.downloaded)
+            _sync_asset(api, asset, photos_dest, stats, expected)
+            _emit(stats, seen, progress_cb)
 
     # Spiegel: nur bei vollständiger Iteration UND nicht-leerem Ergebnis (Schutz vor Massenlöschen).
     if complete and expected:
-        stats.deleted = util.prune_extra(photos_dest, expected)
+        stats.deleted += util.prune_extra(photos_dest, expected)
     elif not complete:
-        LOGGER.warning("[%s] Photos-Iteration unvollständig -> kein Löschen.", apple_id)
+        LOGGER.warning("[%s] %s-Iteration unvollständig -> kein Löschen.", apple_id, label)
     elif not expected:
-        LOGGER.warning("[%s] Photos-Liste leer -> kein Löschen (Sicherheit).", apple_id)
+        LOGGER.warning("[%s] %s-Liste leer -> kein Löschen (Sicherheit).", apple_id, label)
     _emit(stats, seen, progress_cb)
-    LOGGER.info("[%s] %s", apple_id, stats.summary())
-    return stats
 
 
 def _sync_asset(api, asset, photos_dest: Path, stats: PhotoStats, expected: set) -> None:

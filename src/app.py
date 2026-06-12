@@ -138,7 +138,13 @@ class SyncApp(rumps.App):
         parent.add(rumps.MenuItem("Mail-App-Passwort setzen…",
                                   callback=partial(self._set_mail_password, user.apple_id)))
         parent.add(rumps.MenuItem("Zielordner ändern…", callback=partial(self._change_dest, user.apple_id)))
+        if user.sync_photos:  # geteilte Mediathek ist ein Add-on zu den persönlichen Photos
+            shared = rumps.MenuItem("Geteilte Mediathek sichern",
+                                    callback=partial(self._toggle_shared_photos, user.apple_id))
+            shared.state = 1 if user.sync_shared_photos else 0
+            parent.add(shared)
         services = ", ".join(s for s, on in (("Drive", user.sync_drive), ("Photos", user.sync_photos),
+                                             ("+Geteilt", user.sync_shared_photos),
                                              ("Mail", user.sync_mail)) if on) or "—"
         info = rumps.MenuItem(f"Dienste: {services}  ·  Ziel: {user.dest_base_path or '—'}")
         info.set_callback(None)  # nur Info, nicht klickbar
@@ -371,6 +377,18 @@ class SyncApp(rumps.App):
         self.store.update(user)
         self._rebuild_menu()
         notify.notify("iCloud Sync", f"Zielordner für {apple_id} geändert.")
+
+    def _toggle_shared_photos(self, apple_id: str, _sender=None) -> None:
+        """Schaltet die Sicherung der geteilten Mediathek (-> SharedPhotos/) für den User um."""
+        user = self.store.get(apple_id)
+        if user is None:
+            return
+        user.sync_shared_photos = not user.sync_shared_photos
+        self.store.update(user)
+        self._rebuild_menu()
+        notify.notify("iCloud Sync",
+                      f"Geteilte Mediathek für {apple_id}: "
+                      f"{'wird gesichert (SharedPhotos/)' if user.sync_shared_photos else 'aus'}.")
 
     def _remove_user(self, apple_id: str, _sender=None) -> None:
         if not self._ask_yes_no(f"{apple_id} entfernen? (Backup-Dateien bleiben erhalten)", "Entfernen"):

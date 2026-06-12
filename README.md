@@ -126,9 +126,17 @@ Import sind die Passwörter ggf. neu zu setzen.
 ```
 <dest_base_path>/
   Drive/<originale Ordnerstruktur>/...          # 1:1-Spiegel des iCloud-Drive-Baums
-  Photos/<JJJJ>/<MM>/<kurz-id>_<dateiname>      # nach Erstelldatum; Asset-ID-Präfix gegen Kollisionen
+  Photos/<JJJJ>/<MM>/<kurz-id>_<dateiname>      # persönliche Mediathek; nach Erstelldatum
+  SharedPhotos/<JJJJ>/<MM>/<kurz-id>_<dateiname> # geteilte Mediathek (nur wenn aktiviert)
   Mail/<Ordner>/<uid>.eml                       # echte iCloud-Ordnerstruktur, rohe RFC822-Mails
 ```
+
+**Geteilte Mediathek:** Standardmäßig wird nur die **persönliche** Mediathek gesichert. Über das
+User-Untermenü **„Geteilte Mediathek sichern"** lässt sich zusätzlich die iCloud Shared Photo
+Library nach `SharedPhotos/` spiegeln (getrennter Prune). Da Familienmitglieder sich **dieselbe**
+geteilte Bibliothek teilen, sollte das nur bei **einem** Account aktiviert werden, sonst wird sie
+doppelt gesichert. (Ohne diese Option verschwindet ein von „Persönlich" nach „Gemeinsam"
+verschobenes Foto aus dem `Photos/`-Spiegel.)
 
 Der Sync ist **inkrementell** (Drive: Vergleich über Größe/Änderungszeit; Photos/Mail: Existenz der
 Zieldatei), **resumebar** (Download nach `.part` + atomarer Rename) und ein **Spiegel** (in iCloud

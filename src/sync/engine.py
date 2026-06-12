@@ -151,7 +151,8 @@ def run_user(user: User, store: Optional[UsersStore] = None, progress_cb=None) -
                             reasons.append(msg)
                             notify.notify("iCloud Sync – Drive-Fehler", f"{user.apple_id}: {msg}")
                     if user.sync_photos:
-                        ps = photos.sync_photos(api, user.dest_base_path, user.apple_id, _phase_cb("photos"))
+                        ps = photos.sync_photos(api, user.dest_base_path, user.apple_id,
+                                                _phase_cb("photos"), include_shared=user.sync_shared_photos)
                         if ps.errors > 0:
                             msg = f"Photos: {ps.errors} Fehler"
                             reasons.append(msg)
