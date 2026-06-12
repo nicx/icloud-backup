@@ -72,6 +72,11 @@ Das Icon zeigt auf einen Blick, ob der Auto-Sync läuft: **gefüllte Wolke** = A
 anhalten — geplante Läufe unterbleiben dann, **„Sync jetzt" bleibt aber manuell möglich**. Ein
 **rotes Badge** signalisiert zusätzlich `error`/`needs_reauth`, ein Spinner einen laufenden Sync.
 
+Nach einem **Reboot** wartet die App eine kurze Gnadenfrist (`startup_delay_seconds`, Default 90 s)
+und prüft die iCloud-Erreichbarkeit: Ist das Netz/DNS noch nicht oben, wird der Lauf **still
+übersprungen** (kein Fehler, keine Fehler-E-Mail) und beim nächsten Tick erneut versucht — kein
+Warten bis zum nächsten regulären Intervall.
+
 ### Re-Auth
 
 Apple-Sessions laufen periodisch ab (~2 Monate). Erkennt die App das, setzt sie den User-Status auf

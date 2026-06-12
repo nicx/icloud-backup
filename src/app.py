@@ -16,6 +16,7 @@ import os
 import plistlib
 import sys
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from pathlib import Path
@@ -72,6 +73,7 @@ class SyncApp(rumps.App):
         self._spin = 0
         self._was_running = False
         self._has_icon = False
+        self._started = time.monotonic()  # für die Start-Gnadenfrist (Netz nach Reboot)
         self._setup_menubar_icon()
         self._rebuild_menu()
 
@@ -651,8 +653,19 @@ class SyncApp(rumps.App):
 
     # -- Scheduler-Tick ------------------------------------------------------
 
+    def _in_startup_grace(self) -> bool:
+        """True während der Gnadenfrist nach App-Start (Netz/DNS nach Reboot noch nicht oben)."""
+        return (time.monotonic() - self._started) < self.settings.startup_delay_seconds
+
     def _tick(self, _timer) -> None:
-        """Periodischer Check: fällige User syncen (mit Catch-up) und UI auffrischen."""
+        """Periodischer Check: fällige User syncen (mit Catch-up) und UI auffrischen.
+
+        rumps-Timer feuern sofort beim Start; in der Start-Gnadenfrist daher noch nicht
+        synchronisieren (sonst läuft der erste Versuch nach einem Reboot ins tote Netz).
+        """
+        if self._in_startup_grace():
+            self._rebuild_menu()
+            return
         due = [u for u in self.store.list() if self._is_due(u)]
         if due and not self._sync_lock.locked():
             self._spawn(partial(self._run_due, due))
@@ -687,7 +700,17 @@ class SyncApp(rumps.App):
     # -- Session-Refresh -----------------------------------------------------
 
     def _refresh_sessions(self) -> None:
-        """Prüft je User die Session-Gültigkeit und aktualisiert den Status (Hintergrund)."""
+        """Prüft je User die Session-Gültigkeit und aktualisiert den Status (Hintergrund).
+
+        Wartet die Start-Gnadenfrist ab und überspringt, wenn iCloud (noch) nicht erreichbar
+        ist — sonst würde direkt nach einem Reboot fälschlich `needs_reauth`/`error` gesetzt.
+        """
+        delay = self.settings.startup_delay_seconds - (time.monotonic() - self._started)
+        if delay > 0:
+            time.sleep(delay)
+        if not engine.is_online():
+            LOGGER.info("Session-Check übersprungen: iCloud nicht erreichbar.")
+            return
         for user in self.store.list():
             if user.status == UserStatus.RUNNING:
                 continue

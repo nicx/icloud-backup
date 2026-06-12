@@ -22,6 +22,11 @@ sys.path.insert(0, os.getcwd())
 from src.sync import drive, photos, mail, engine  # noqa: E402
 from src.config.users import User, UserStatus  # noqa: E402
 
+# Tests laufen ohne Netz: Erreichbarkeitsprüfung global auf "online" setzen, damit run_user
+# die (gemockten) Syncs ausführt statt offline zu überspringen. Der Offline-Fall wird in
+# test_engine_offline_is_transient gezielt umgeschaltet.
+engine.is_online = lambda *a, **k: True
+
 
 # --- Fakes: Drive/Photos ----------------------------------------------------
 
@@ -451,13 +456,44 @@ def test_user_last_error_roundtrip():
 
 
 def test_settings_auto_sync_paused_roundtrip():
-    """auto_sync_paused überlebt save/load; alte settings.json ohne Feld -> False."""
+    """auto_sync_paused/startup_delay überleben save/load; sinnvolle Defaults."""
     from src.config.settings import Settings, load_settings, save_settings
 
-    save_settings(Settings(auto_sync_paused=True))
-    check(load_settings().auto_sync_paused is True, "settings: auto_sync_paused=True persistiert")
-    check(Settings().auto_sync_paused is False, "settings: Default ist False")
+    save_settings(Settings(auto_sync_paused=True, startup_delay_seconds=5))
+    loaded = load_settings()
+    check(loaded.auto_sync_paused is True, "settings: auto_sync_paused=True persistiert")
+    check(loaded.startup_delay_seconds == 5, "settings: startup_delay_seconds persistiert")
+    check(Settings().auto_sync_paused is False, "settings: auto_sync_paused-Default False")
+    check(Settings().startup_delay_seconds == 90, "settings: startup_delay-Default 90")
     save_settings(Settings())  # zurücksetzen
+
+
+def test_engine_offline_is_transient():
+    """Offline (iCloud nicht erreichbar) ist KEIN Fehler: kein error-Status, keine Mail,
+    last_run unverändert -> Retry beim nächsten Tick (nicht erst nach sync_interval_hours)."""
+    from src import notify
+    from src.config.settings import Settings, save_settings
+    from src.config.users import UsersStore
+
+    dest = tempfile.mkdtemp(prefix="offline_")
+    save_settings(Settings(error_email_enabled=True, error_email_to="ops@example.com"))
+    sent: list = []
+    orig_mail, orig_online = notify.send_mail, engine.is_online
+    notify.send_mail = lambda *a, **k: (sent.append(a) or True)
+    engine.is_online = lambda *a, **k: False
+    try:
+        store = UsersStore()
+        u = User(apple_id="off@example.com", sync_drive=True, sync_photos=True, sync_mail=True,
+                 dest_base_path=dest, status=UserStatus.OK, last_run="2026-01-01T00:00:00+00:00")
+        store.add(u)
+        status = engine.run_user(u, store)
+        got = store.get("off@example.com")
+        check(status != UserStatus.ERROR, f"offline: kein ERROR-Status (war {status})")
+        check(got.last_run == "2026-01-01T00:00:00+00:00", "offline: last_run unverändert (Retry bald, nicht 4h)")
+        check(sent == [], "offline: keine Fehler-E-Mail")
+    finally:
+        notify.send_mail, engine.is_online = orig_mail, orig_online
+        save_settings(Settings())
 
 
 def test_engine_emails_on_new_problem():
@@ -604,6 +640,7 @@ if __name__ == "__main__":
     test_engine_clears_last_error_on_success()
     test_user_last_error_roundtrip()
     test_settings_auto_sync_paused_roundtrip()
+    test_engine_offline_is_transient()
     test_engine_emails_on_new_problem()
     test_config_backup_restore()
     for m in PASS:

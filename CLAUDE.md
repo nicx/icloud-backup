@@ -78,7 +78,14 @@ Trennung im Code, NICHT in separate Prozesse:
   ausgenommen (`_is_due`); `error`-User werden beim nächsten Fälligkeitsfenster
   hingegen wieder mitgenommen (automatischer Retry). **Auto-Sync pausierbar**
   (`settings.auto_sync_paused`, Menü „Auto-Sync pausieren/fortsetzen") — dann ist niemand
-  fällig; „Sync jetzt" bleibt manuell möglich.
+  fällig; „Sync jetzt" bleibt manuell möglich. **Start-Gnadenfrist**
+  (`settings.startup_delay_seconds`, Default 90 s): rumps-Timer feuern sofort beim Start —
+  in der Gnadenfrist wird noch nicht gesynct, damit der erste Lauf nach einem Reboot nicht
+  ins noch nicht hochgefahrene Netz/DNS läuft. **Offline-Erkennung** (`engine.is_online`,
+  TCP zu `www.icloud.com:443`): ist iCloud nicht erreichbar, wird der Lauf **still
+  übersprungen** (kein `error`, keine Fehler-E-Mail) und `last_run` **nicht** gesetzt → der
+  nächste Tick versucht es erneut (kein 4-h-Loch). Auch `_refresh_sessions` wartet die
+  Gnadenfrist ab und überspringt offline.
 - **Menüleisten-Icon als Statusanzeige** (`menubar_icon.py`, zwei Template-Varianten):
   **gefüllt** (`icloud.fill`) = Auto-Sync aktiv, **umrandet** (`icloud`) = pausiert; rotes
   Badge bei `error`/`needs_reauth`, Spinner im Titel während eines Laufs (`_update_icon`).
@@ -239,6 +246,10 @@ ggf. erneutes Setzen der Passwörter.
 4. **Keychain-Prompts** – durch Ad-hoc-Codesigning mit stabiler Identität gemildert.
 5. **UNAS-Mount fehlt** – `engine.is_mount_available` prüft vor dem Sync; sonst sauberer
    Abbruch + Notification, kein Crash.
+5b. **Netz nach Reboot noch nicht oben** – Autostart + sofort feuernder rumps-Timer würden
+   ins tote Netz/DNS laufen (`Request failed to iCloud`, `[Errno 8] nodename…`). Abgefangen
+   durch Start-Gnadenfrist (`startup_delay_seconds`) + `engine.is_online`-Check: offline ⇒
+   stiller Skip ohne `error`/Mail, `last_run` unverändert (Retry nächster Tick).
 6. **Freier Speicher** – `engine._check_free_space` warnt (< 2 GiB), bricht aber nicht ab.
 7. **pyicloud-API-Drift** – der *Import* ist auf `auth/session.py` beschränkt (Auth/2FA/
    Exceptions). **Aber:** `sync/drive.py` und `sync/photos.py` hängen an pyicloud-Objekt-Shapes

@@ -23,6 +23,8 @@ class Settings:
     :param autostart: Beim Login automatisch starten (Verdrahtung folgt späterer Durchgang).
     :param notifications: macOS-Notifications aktiviert.
     :param auto_sync_paused: Auto-Sync pausiert (Scheduler stößt keine Läufe an; Icon umrandet).
+    :param startup_delay_seconds: Gnadenfrist nach App-Start, bevor der erste Auto-Sync läuft
+        (gibt dem Netzwerk/DNS nach einem Reboot Zeit; manueller „Sync jetzt" ignoriert sie).
     :param error_email_enabled: bei Fehler/Re-Auth eine E-Mail verschicken (über lokales Relay).
     :param error_email_to: Empfänger der Fehler-Mails (leer = aus).
     :param error_email_from: Absender; leer ⇒ es wird ``error_email_to`` genutzt.
@@ -33,6 +35,7 @@ class Settings:
     autostart: bool = False
     notifications: bool = True
     auto_sync_paused: bool = False  # True ⇒ Scheduler stößt keine Läufe an (Icon umrandet)
+    startup_delay_seconds: int = 90  # Gnadenfrist nach App-Start, bevor automatisch gesynct wird
     error_email_enabled: bool = False
     error_email_to: str = ""
     error_email_from: str = ""

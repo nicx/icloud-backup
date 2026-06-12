@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import socket
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -29,10 +30,30 @@ LOGGER = logging.getLogger(__name__)
 # Vor einem großen Lauf warnen, wenn weniger als das frei ist (reine Warnung, kein Abbruch).
 _LOW_SPACE_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB
 
+# Erreichbarkeitsprüfung (DNS + TCP) für die Offline-Erkennung direkt nach dem Boot.
+_REACHABILITY_HOST = "www.icloud.com"
+_REACHABILITY_PORT = 443
+_REACHABILITY_TIMEOUT = 4.0
+
 
 def is_mount_available(dest_base_path: str) -> bool:
     """Prüft, ob der Ziel-Basispfad existiert/erreichbar ist (Fallstrick #5: UNAS-Mount fehlt)."""
     return bool(dest_base_path) and os.path.isdir(dest_base_path)
+
+
+def is_online(host: str = _REACHABILITY_HOST, port: int = _REACHABILITY_PORT,
+              timeout: float = _REACHABILITY_TIMEOUT) -> bool:
+    """True, wenn iCloud per DNS+TCP erreichbar ist (grobe Online-Prüfung).
+
+    Fängt den häufigsten Reboot-Fall ab: Netz/DNS ist beim Autostart noch nicht oben
+    (`Request failed to iCloud`, `[Errno 8] nodename nor servname`). Dann lieber still
+    überspringen statt als Fehler zu werten.
+    """
+    try:
+        socket.create_connection((host, port), timeout=timeout).close()
+        return True
+    except OSError:
+        return False
 
 
 def _now_iso() -> str:
@@ -89,6 +110,15 @@ def run_user(user: User, store: Optional[UsersStore] = None, progress_cb=None) -
     _check_free_space(user.dest_base_path)
     # Config-Kopie aufs Ziel-Volume (ohne Passwörter) — UNAS-Snapshots versionieren sie.
     backup_config_to(os.path.join(user.dest_base_path, BACKUP_DIRNAME))
+
+    # iCloud erreichbar? Direkt nach dem Boot ist das Netz/DNS oft noch nicht oben.
+    # Dann ist das KEIN echter Fehler: Lauf still überspringen (kein error-Status, keine
+    # Fehler-E-Mail) UND last_run NICHT setzen -> beim nächsten Tick erneut versuchen
+    # (nicht erst in `sync_interval_hours`).
+    if (user.sync_drive or user.sync_photos or user.sync_mail) and not is_online():
+        LOGGER.warning("[%s] iCloud nicht erreichbar -> Lauf übersprungen (Retry beim nächsten Tick).",
+                       user.apple_id)
+        return _set(UserStatus.IDLE)  # last_run/last_error unverändert, kein _finalize -> keine Mail
 
     reasons: list[str] = []   # gesammelte Klartext-Fehlergründe (-> last_error)
     web_reauth = False
