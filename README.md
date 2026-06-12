@@ -143,6 +143,10 @@ Video gesichert. Bei Throttling greift exponentielles Backoff.
 
 ## Build zum `.app`-Bundle (py2app)
 
+**Voraussetzung:** das venv muss existieren (einmalig, siehe [Setup](#setup-entwicklung--betrieb-ohne-app)):
+`/opt/homebrew/bin/python3.13 -m venv .venv`. `build/build.sh` installiert die Build-Deps
+selbst, legt das venv aber **nicht** an und bricht sonst mit Hinweis ab.
+
 Ein Schritt (Build + Ad-hoc-Signierung):
 
 ```bash
