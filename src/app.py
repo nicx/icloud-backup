@@ -73,6 +73,8 @@ class SyncApp(rumps.App):
         self._spin = 0
         self._was_running = False
         self._has_icon = False
+        self._drive_folders: dict = {}   # apple_id -> [Top-Level-Drive-Ordner] (Laufzeit-Cache)
+        self._menu_dirty = False         # vom Hintergrund gesetzt -> _ui_tick baut das Menü neu
         self._started = time.monotonic()  # für die Start-Gnadenfrist (Netz nach Reboot)
         self._setup_menubar_icon()
         self._rebuild_menu()
@@ -143,10 +145,13 @@ class SyncApp(rumps.App):
                                     callback=partial(self._toggle_shared_photos, user.apple_id))
             shared.state = 1 if user.sync_shared_photos else 0
             parent.add(shared)
+        if user.sync_drive:
+            parent.add(self._drive_excludes_menu(user))
         services = ", ".join(s for s, on in (("Drive", user.sync_drive), ("Photos", user.sync_photos),
                                              ("+Geteilt", user.sync_shared_photos),
                                              ("Mail", user.sync_mail)) if on) or "—"
-        info = rumps.MenuItem(f"Dienste: {services}  ·  Ziel: {user.dest_base_path or '—'}")
+        excl = f"  ·  Ausschlüsse: {len(user.drive_excludes)}" if user.drive_excludes else ""
+        info = rumps.MenuItem(f"Dienste: {services}  ·  Ziel: {user.dest_base_path or '—'}{excl}")
         info.set_callback(None)  # nur Info, nicht klickbar
         parent.add(info)
         # Bei Fehler/Re-Auth den letzten Grund als nicht-klickbare Info-Zeile zeigen.
@@ -389,6 +394,63 @@ class SyncApp(rumps.App):
         notify.notify("iCloud Sync",
                       f"Geteilte Mediathek für {apple_id}: "
                       f"{'wird gesichert (SharedPhotos/)' if user.sync_shared_photos else 'aus'}.")
+
+    # -- Drive-Ausschlüsse ---------------------------------------------------
+
+    def _drive_excludes_menu(self, user: User) -> rumps.MenuItem:
+        """Untermenü: oberste Drive-Ordner live laden und per Häkchen aus-/abwählen."""
+        parent = rumps.MenuItem("Drive-Ausschlüsse")
+        parent.add(rumps.MenuItem("Ordnerliste aktualisieren",
+                                  callback=partial(self._load_drive_folders, user.apple_id)))
+        parent.add(rumps.separator)
+        excluded = set(user.drive_excludes)
+        names = sorted(set(self._drive_folders.get(user.apple_id, [])) | excluded)
+        if not names:
+            hint = rumps.MenuItem("(noch nicht geladen — ‚Ordnerliste aktualisieren')")
+            hint.set_callback(None)
+            parent.add(hint)
+        else:
+            for name in names:
+                it = rumps.MenuItem(name, callback=partial(self._toggle_drive_exclude, user.apple_id, name))
+                it.state = 1 if name in excluded else 0
+                parent.add(it)
+        return parent
+
+    def _load_drive_folders(self, apple_id: str, _sender=None) -> None:
+        notify.notify("iCloud Sync", f"Lade Drive-Ordner für {apple_id} …")
+        self._spawn(partial(self._fetch_drive_folders, apple_id))
+
+    def _fetch_drive_folders(self, apple_id: str) -> None:
+        """Hintergrund: oberste Drive-Ordner abrufen, cachen, Menü-Neuaufbau anstoßen (Main-Thread)."""
+        pw = keychain.get_password(apple_id)
+        if not pw:
+            notify.notify("iCloud Sync", f"{apple_id}: kein Apple-ID-Passwort im Keychain.")
+            return
+        if not engine.is_online():
+            notify.notify("iCloud Sync", "iCloud nicht erreichbar — später erneut versuchen.")
+            return
+        names = session.list_drive_top_level(apple_id, pw)
+        if names is None:
+            notify.notify("iCloud Sync", f"{apple_id}: Drive-Ordner nicht abrufbar (ggf. Re-Auth).")
+            return
+        self._drive_folders[apple_id] = names
+        self._menu_dirty = True  # _ui_tick (Main-Thread) baut das Menü neu
+        notify.notify("iCloud Sync", f"{len(names)} Drive-Ordner geladen — jetzt auswählbar.")
+
+    def _toggle_drive_exclude(self, apple_id: str, name: str, _sender=None) -> None:
+        user = self.store.get(apple_id)
+        if user is None:
+            return
+        ex = list(user.drive_excludes)
+        if name in ex:
+            ex.remove(name)
+        else:
+            ex.append(name)
+        user.drive_excludes = ex
+        self.store.update(user)
+        self._rebuild_menu()
+        state = "ausgeschlossen" if name in ex else "wieder dabei"
+        notify.notify("iCloud Sync", f"Drive-Ordner ‚{name}': {state} ({apple_id}).")
 
     def _remove_user(self, apple_id: str, _sender=None) -> None:
         if not self._ask_yes_no(f"{apple_id} entfernen? (Backup-Dateien bleiben erhalten)", "Entfernen"):
@@ -638,6 +700,9 @@ class SyncApp(rumps.App):
 
     def _ui_tick(self, _timer) -> None:
         """Schneller UI-Refresh: Spinner + Live-Counts, solange ein User läuft."""
+        if self._menu_dirty:  # vom Hintergrund (z. B. Drive-Ordner-Fetch) angefordert
+            self._menu_dirty = False
+            self._rebuild_menu()
         running = [u for u in self.store.list() if u.status == UserStatus.RUNNING]
         if running:
             self._spin = (self._spin + 1) % len(SPINNER)

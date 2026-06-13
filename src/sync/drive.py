@@ -53,18 +53,32 @@ class _Ctx:
     expected: set                  # set[Path] der serverseitig vorhandenen Zieldateien
     progress_cb: object = None
     complete: bool = True          # False, sobald ein Ordner-Listing fehlschlägt -> kein Pruning
+    excludes: frozenset = frozenset()  # normalisierte Drive-rel. Pfade, die übersprungen werden
 
 
-def sync_drive(api, dest_base_path: str, apple_id: str, progress_cb=None) -> DriveStats:
+def _normalize_excludes(excludes) -> frozenset:
+    """Macht Ausschluss-Einträge mit der Walk-Normalisierung vergleichbar (safe_component je Segment)."""
+    out = set()
+    for entry in excludes or ():
+        parts = [util.safe_component(p) for p in str(entry).replace("\\", "/").split("/") if p.strip()]
+        if parts:
+            out.add("/".join(parts))
+    return frozenset(out)
+
+
+def sync_drive(api, dest_base_path: str, apple_id: str, progress_cb=None, excludes=()) -> DriveStats:
     """Spiegelt iCloud Drive nach ``dest_base_path/Drive`` (dateibasiert).
 
     :param api: authentifizierte ``PyiCloudService``-Instanz.
     :param progress_cb: optionaler Callback ``cb(counts: dict)`` für Live-Fortschritt.
+    :param excludes: Drive-relative Ordner/Pfade, die NICHT gesichert werden (z. B. geteilte).
+        Ausgeschlossene Pfade landen nicht in ``expected`` ⇒ der Spiegel-Prune entfernt eine
+        evtl. vorhandene lokale Kopie.
     :returns: :class:`DriveStats` mit Zählern für das Logging.
     """
     stats = DriveStats()
     ctx = _Ctx(root_dest=Path(dest_base_path) / "Drive", stats=stats,
-               expected=set(), progress_cb=progress_cb)
+               expected=set(), progress_cb=progress_cb, excludes=_normalize_excludes(excludes))
     _emit(ctx)
 
     try:
@@ -100,6 +114,13 @@ def _emit(ctx: _Ctx) -> None:
 
 def _walk(node, rel_parts: list[str], ctx: _Ctx, depth: int) -> None:
     """Verarbeitet einen Knoten rekursiv (Datei -> ggf. laden, Ordner -> absteigen)."""
+    rel = "/".join(rel_parts)
+    if ctx.excludes and any(rel == e or rel.startswith(e + "/") for e in ctx.excludes):
+        # Ausgeschlossen: nicht laden, nicht zu expected (-> Prune entfernt lokale Kopie),
+        # nicht absteigen. `complete` bleibt unberührt (bewusster Skip).
+        if depth == 0:
+            LOGGER.info("Drive-Ausschluss übersprungen: %s", rel)
+        return
     try:
         node_type = node.type
     except Exception as exc:  # noqa: BLE001 - defekter Knoten soll den Lauf nicht stoppen

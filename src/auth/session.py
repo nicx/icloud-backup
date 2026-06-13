@@ -140,3 +140,27 @@ def check_session(apple_id: str, password: Optional[str]) -> UserStatus:
     if api.requires_2fa or api.requires_2sa:
         return UserStatus.NEEDS_REAUTH
     return UserStatus.OK
+
+
+def list_drive_top_level(apple_id: str, password: Optional[str]) -> Optional[list]:
+    """Liefert die Namen der **obersten** iCloud-Drive-Ordner (für die Ausschluss-Auswahl).
+
+    Nur Ordner (``type == "folder"``), sortiert. ``None`` bei fehlendem Passwort, 2FA-Bedarf
+    oder Fehler. Kapselt den pyicloud-Zugriff (wie der restliche Auth-Pfad)."""
+    if not password:
+        return None
+    try:
+        api = build_service(apple_id, password)
+        if api.requires_2fa or api.requires_2sa:
+            return None
+        names = set()
+        for child in api.drive.get_children():
+            try:
+                if getattr(child, "type", None) == "folder" and child.name:
+                    names.add(child.name)
+            except Exception:  # noqa: BLE001 - einzelner defekter Knoten egal
+                continue
+        return sorted(names)
+    except (PyiCloudException, Exception) as exc:  # noqa: BLE001 - best-effort fürs UI
+        LOGGER.warning("Drive-Ordnerliste für %s nicht abrufbar: %s", apple_id, exc)
+        return None

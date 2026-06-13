@@ -277,6 +277,37 @@ def test_drive():
     check(s4.deleted == 0 and os.path.exists(extra), "drive Guard: Listing-Fehler -> kein Löschen")
 
 
+def test_drive_excludes():
+    """Ausgeschlossene Top-Level-Ordner werden nicht geladen und lokal geprunt; Rest bleibt."""
+    dest = tempfile.mkdtemp(prefix="driveexcl_")
+    keep = FakeDriveNode("Eigen", "folder", children=[FakeDriveNode("k.txt", "file", size=1, content=b"k")])
+    shared = FakeDriveNode("Geteilt", "folder", children=[FakeDriveNode("s.txt", "file", size=1, content=b"s")])
+    api = FakeApi(drive_service=FakeDriveService([keep, shared]))
+
+    # 1. Lauf ohne Ausschluss -> beide da
+    drive.sync_drive(api, dest, "d@example.com")
+    check(os.path.exists(os.path.join(dest, "Drive", "Eigen", "k.txt")), "drive: Eigen geladen")
+    check(os.path.exists(os.path.join(dest, "Drive", "Geteilt", "s.txt")), "drive: Geteilt geladen")
+
+    # 2. Lauf mit Ausschluss "Geteilt" -> nicht geladen UND lokal geprunt; Eigen bleibt
+    s = drive.sync_drive(api, dest, "d@example.com", excludes=["Geteilt"])
+    check(os.path.exists(os.path.join(dest, "Drive", "Eigen", "k.txt")), "drive Ausschluss: Eigen bleibt")
+    check(not os.path.exists(os.path.join(dest, "Drive", "Geteilt")), "drive Ausschluss: Geteilt lokal entfernt")
+    check(s.deleted == 1, f"drive Ausschluss: 1 geprunt (war {s.deleted})")
+
+
+def test_drive_excludes_nested():
+    """Ausschluss greift auch auf verschachtelte Pfade (a/b)."""
+    dest = tempfile.mkdtemp(prefix="driveexcln_")
+    sub = FakeDriveNode("b", "folder", children=[FakeDriveNode("x.txt", "file", size=1, content=b"x")])
+    other = FakeDriveNode("c", "folder", children=[FakeDriveNode("y.txt", "file", size=1, content=b"y")])
+    top = FakeDriveNode("a", "folder", children=[sub, other])
+    api = FakeApi(drive_service=FakeDriveService([top]))
+    drive.sync_drive(api, dest, "d@example.com", excludes=["a/b"])
+    check(not os.path.exists(os.path.join(dest, "Drive", "a", "b")), "drive nested-Ausschluss: a/b weg")
+    check(os.path.exists(os.path.join(dest, "Drive", "a", "c", "y.txt")), "drive nested-Ausschluss: a/c bleibt")
+
+
 # --- Photos -----------------------------------------------------------------
 
 def test_photos():
@@ -539,6 +570,11 @@ def test_user_last_error_roundtrip():
           "user: sync_shared_photos Roundtrip")
     check(User.from_dict({"apple_id": "old@example.com"}).sync_shared_photos is False,
           "user: sync_shared_photos Default False (alte JSON)")
+    # drive_excludes: Roundtrip + Default + alte JSON
+    check(User.from_dict(User(apple_id="d@x", drive_excludes=["Geteilt"]).to_dict()).drive_excludes == ["Geteilt"],
+          "user: drive_excludes Roundtrip")
+    check(User.from_dict({"apple_id": "old@example.com"}).drive_excludes == [],
+          "user: drive_excludes Default [] (alte JSON)")
 
 
 def test_settings_auto_sync_paused_roundtrip():
@@ -714,6 +750,8 @@ def test_config_backup_restore():
 
 if __name__ == "__main__":
     test_drive()
+    test_drive_excludes()
+    test_drive_excludes_nested()
     test_photos()
     test_photos_shared_library()
     test_photos_shared_resilience()

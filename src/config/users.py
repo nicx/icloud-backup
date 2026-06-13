@@ -42,6 +42,8 @@ class User:
         Default aus — pro geteilter Bibliothek sollte nur EIN Account sichern).
     :param sync_mail: iCloud Mail (IMAP) sichern? Default aus (braucht app-spezifisches Passwort).
     :param dest_base_path: Ziel-Basispfad auf dem (gemounteten) Volume.
+    :param drive_excludes: Drive-relative Ordner (z. B. geteilte), die NICHT gesichert werden —
+        ausgeschlossene Pfade werden vom Spiegel-Prune lokal entfernt.
     :param status: aktueller :class:`UserStatus`.
     :param last_run: ISO-8601-Zeitstempel des letzten erfolgreichen Laufbeginns (oder None).
     """
@@ -52,6 +54,7 @@ class User:
     sync_shared_photos: bool = False  # geteilte iCloud-Mediathek (Add-on zu sync_photos)
     sync_mail: bool = False
     dest_base_path: str = ""
+    drive_excludes: list = field(default_factory=list)  # Drive-Ordner (rel. Pfade), die NICHT gesichert werden
     status: UserStatus = UserStatus.IDLE
     last_run: Optional[str] = None
     last_error: Optional[str] = None  # Klartext-Grund des letzten Fehlers (für Menü/Notification)
@@ -75,6 +78,7 @@ class User:
             sync_shared_photos=bool(raw.get("sync_shared_photos", False)),
             sync_mail=bool(raw.get("sync_mail", False)),
             dest_base_path=raw.get("dest_base_path", ""),
+            drive_excludes=list(raw.get("drive_excludes") or []),
             status=status_enum,
             last_run=raw.get("last_run"),
             last_error=raw.get("last_error"),

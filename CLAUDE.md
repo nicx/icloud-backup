@@ -141,6 +141,10 @@ Pro User (`User`-Dataclass, persistiert als `users.json` in App Support):
   Account das aktivieren (Paare teilen sich dieselbe → sonst doppelt). Toggle im User-Untermenü.
 - `dest_base_path` — Ziel-Basispfad auf dem (gemounteten) Volume; darunter legt die
   Engine `Drive/`, `Photos/`, `Mail/` an
+- `drive_excludes` (Default leer): Drive-Ordner (rel. Pfade), die **nicht** gesichert werden —
+  z. B. mit mir geteilte Ordner auf dem Collaborator-Account. Ausgeschlossenes wird vom
+  Spiegel-Prune **lokal entfernt**. Auswahl im Menü „Drive-Ausschlüsse" (Live-Ordnerliste +
+  Häkchen).
 - `status`: `idle` / `running` / `ok` / `needs_reauth` / `error`
 - `last_run`: ISO-8601-Zeitstempel (UTC) des letzten erfolgreichen Laufbeginns
 - `last_error`: Klartext-Grund des letzten Fehlers (für Menü/Notification; `None` bei Erfolg)
@@ -167,6 +171,12 @@ Zieldatei existiert / stimmt in Größe+mtime. Spiegeln = Überzähliges (geguar
 `trash`/`unknown` übersprungen). Download-Entscheidung via `util.needs_download`
 (fehlt / Größe ≠ / mtime weicht > 2 s ab). 0-Byte-Dateien werden als leere Datei
 angelegt (iCloud liefert sonst 400). Resumebar via `.part` + atomarem Rename.
+**Ausschlüsse** (`user.drive_excludes`, normalisiert via `safe_component`): passende rel. Pfade
+werden im `_walk` übersprungen (nicht geladen, **nicht** in `expected` → der Spiegel-Prune
+entfernt eine vorhandene lokale Kopie). Damit lassen sich **geteilte Ordner** auf dem
+Collaborator-Account entdoppeln (der Besitzer-Account sichert sie). pyicloud liefert kein
+verlässliches Eigentümer-Feld → bewusst manuelle Liste statt fragiler Auto-Erkennung
+(Fallstrick #7); Auswahl per Live-Ordnerliste (`session.list_drive_top_level`) + Häkchen im UI.
 
 **Photos** (`sync/photos.py`): `api.photos.all` (intern paginiert) iterieren = **private**
 Mediathek (CloudKit-Zone `PRIMARY_ZONE`, `scope="private"`). Zielpfad

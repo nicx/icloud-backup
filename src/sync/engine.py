@@ -144,7 +144,8 @@ def run_user(user: User, store: Optional[UsersStore] = None, progress_cb=None) -
                 api = result.api
                 try:
                     if user.sync_drive:
-                        s = drive.sync_drive(api, user.dest_base_path, user.apple_id, _phase_cb("drive"))
+                        s = drive.sync_drive(api, user.dest_base_path, user.apple_id,
+                                             _phase_cb("drive"), excludes=user.drive_excludes)
                         if s.errors > 0:
                             detail = f" (z. B. {s.error_paths[0]})" if s.error_paths else ""
                             msg = f"Drive: {s.errors} Datei-Fehler{detail}"

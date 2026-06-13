@@ -138,6 +138,13 @@ geteilte Bibliothek teilen, sollte das nur bei **einem** Account aktiviert werde
 doppelt gesichert. (Ohne diese Option verschwindet ein von „Persönlich" nach „Gemeinsam"
 verschobenes Foto aus dem `Photos/`-Spiegel.)
 
+**Geteilte Drive-Ordner:** Ein Ordner, den du besitzt und mit jemandem teilst, erscheint auch
+in **dessen** Account (als „mit mir geteilt") und würde dort doppelt gesichert. Im User-Untermenü
+**„Drive-Ausschlüsse"** kannst du die obersten Drive-Ordner **live laden** und per Häkchen vom
+Sync ausnehmen — typischerweise auf dem Account des Mitnutzers die geteilten Ordner, sodass nur
+der **Besitzer** sie sichert. ⚠️ Ausgeschlossene Ordner werden beim nächsten Lauf **lokal aus dem
+Spiegel entfernt** (das ist gewollt — so verschwindet die Dublette).
+
 Der Sync ist **inkrementell** (Drive: Vergleich über Größe/Änderungszeit; Photos/Mail: Existenz der
 Zieldatei), **resumebar** (Download nach `.part` + atomarer Rename) und ein **Spiegel** (in iCloud
 Gelöschtes/Verschobenes wird nachgezogen — Historie via Snapshots). Live Photos werden als Foto **und**
